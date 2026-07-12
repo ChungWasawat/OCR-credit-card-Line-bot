@@ -1,0 +1,75 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen --group dev
+      - run: uv run pytest -q
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGION: ${{ vars.REGION }}
+      PROJECT_ID: ${{ vars.GCP_PROJECT }}
+      IMAGE: ${{ vars.ARTIFACT_REGISTRY_URI }}/receipt-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push
+        run: |
+          docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+      - name: Deploy webhook-service
+        run: |
+          gcloud run deploy webhook-service \
+            --image="${IMAGE}:${{ github.sha }}" \
+            --region="${REGION}" --project="${PROJECT_ID}" --quiet
+
+      - name: Deploy worker-service
+        run: |
+          gcloud run deploy worker-service \
+            --image="${IMAGE}:${{ github.sha }}" \
+            --region="${REGION}" --project="${PROJECT_ID}" \
+            --args=services.worker_main:app,--host,0.0.0.0,--port,8080 \
+            --quiet
+
+      - name: Smoke test — webhook rejects unsigned request
+        run: |
+          URL=$(gcloud run services describe webhook-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.url)')
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/callback" -H 'Content-Type: application/json' -d '{}')
+          test "$CODE" = "403" || { echo "expected 403, got $CODE"; exit 1; }
+
+      - name: Verify worker args (regression guard for the host/port bug)
+        run: |
+          REV=$(gcloud run services describe worker-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.latestReadyRevision)')
+          ARGS=$(gcloud run revisions describe "$REV" --region="${REGION}" --project="${PROJECT_ID}" --format='value(spec.containers[0].args)')
+          echo "$ARGS" | grep -q -- '--host' && echo "$ARGS" | grep -q -- '--port' || { echo "worker args missing --host/--port: $ARGS"; exit 1; }
