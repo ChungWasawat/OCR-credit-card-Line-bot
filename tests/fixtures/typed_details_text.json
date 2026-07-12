@@ -1,0 +1,24 @@
+{
+  "destination": "Ubotdestinationxxxxxxxxxxxxxxxxxx",
+  "events": [
+    {
+      "type": "message",
+      "source": {
+        "type": "group",
+        "groupId": "Callowedgroupidxxxxxxxxxxxxxxxxxxx",
+        "userId": "U123"
+      },
+      "timestamp": 1751000060000,
+      "mode": "active",
+      "webhookEventId": "01WHDETAILS0000000000001",
+      "deliveryContext": { "isRedelivery": false },
+      "replyToken": "tok-typed-details-1",
+      "message": {
+        "type": "text",
+        "id": "msg-typed-details-1",
+        "text": "#v1|det|msg-image-1|202607_msg-image-1.jpg|U123|claude|2026-07-12|199.50|1234|Card_A1|grocery|BIG C SUPERCENTER|\nbirthday gift for mom",
+        "quoteToken": "qt-typed-details-1"
+      }
+    }
+  ]
+}

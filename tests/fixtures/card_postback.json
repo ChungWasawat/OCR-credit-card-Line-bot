@@ -1,0 +1,21 @@
+{
+  "destination": "Ubotdestinationxxxxxxxxxxxxxxxxxx",
+  "events": [
+    {
+      "type": "postback",
+      "source": {
+        "type": "group",
+        "groupId": "Callowedgroupidxxxxxxxxxxxxxxxxxxx",
+        "userId": "U123"
+      },
+      "timestamp": 1751000010000,
+      "mode": "active",
+      "webhookEventId": "01WHCARD00000000000000001",
+      "deliveryContext": { "isRedelivery": false },
+      "replyToken": "tok-card-1",
+      "postback": {
+        "data": "v1|card|msg-image-1|202607_msg-image-1.jpg|U123|claude|2026-07-12|199.50|1234|Card_A1||BIG C SUPERCENTER|"
+      }
+    }
+  ]
+}

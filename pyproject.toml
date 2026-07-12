@@ -1,0 +1,27 @@
+[project]
+name = "receipt-bot"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.116.0",
+    "fastapi>=0.139.0",
+    "google-api-python-client>=2.198.0",
+    "google-auth>=2.55.2",
+    "google-cloud-storage>=2.18.0",
+    "google-cloud-tasks>=2.23.0",
+    "google-genai>=2.11.0",
+    "line-bot-sdk>=3",
+    "openai>=2.45.0",
+    "pydantic>=2",
+    "python-dotenv>=1.2.2",
+    "tzdata>=2026.3",
+    "uvicorn>=0.51.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

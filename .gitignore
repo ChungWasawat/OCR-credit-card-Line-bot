@@ -1,0 +1,14 @@
+key.json
+.env
+.venv/
+*.tfvars
+__pycache__/
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# data
+data/
+
+# misc
+checklist*.md

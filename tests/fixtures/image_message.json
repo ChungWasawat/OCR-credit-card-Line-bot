@@ -1,0 +1,24 @@
+{
+  "destination": "Ubotdestinationxxxxxxxxxxxxxxxxxx",
+  "events": [
+    {
+      "type": "message",
+      "source": {
+        "type": "group",
+        "groupId": "Callowedgroupidxxxxxxxxxxxxxxxxxxx",
+        "userId": "U123"
+      },
+      "timestamp": 1751000000000,
+      "mode": "active",
+      "webhookEventId": "01WHIMAGE0000000000000001",
+      "deliveryContext": { "isRedelivery": false },
+      "replyToken": "tok-image-1",
+      "message": {
+        "type": "image",
+        "id": "msg-image-1",
+        "contentProvider": { "type": "line" },
+        "quoteToken": "qt-image-1"
+      }
+    }
+  ]
+}

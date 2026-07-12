@@ -1,0 +1,21 @@
+{
+  "destination": "Ubotdestinationxxxxxxxxxxxxxxxxxx",
+  "events": [
+    {
+      "type": "postback",
+      "source": {
+        "type": "group",
+        "groupId": "Callowedgroupidxxxxxxxxxxxxxxxxxxx",
+        "userId": "U123"
+      },
+      "timestamp": 1751000050000,
+      "mode": "active",
+      "webhookEventId": "01WHCANCEL000000000000001",
+      "deliveryContext": { "isRedelivery": false },
+      "replyToken": "tok-cancel-1",
+      "postback": {
+        "data": "v1|cancel|msg-image-1|202607_msg-image-1.jpg|U123|claude|2026-07-12|199.50|1234|Card_A1|grocery|BIG C SUPERCENTER|"
+      }
+    }
+  ]
+}
