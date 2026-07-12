@@ -70,6 +70,6 @@ jobs:
 
       - name: Verify worker args (regression guard for the host/port bug)
         run: |
-          REV=$(gcloud run services describe worker-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.latestReadyRevision)')
+          REV=$(gcloud run services describe worker-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.latestReadyRevisionName)')
           ARGS=$(gcloud run revisions describe "$REV" --region="${REGION}" --project="${PROJECT_ID}" --format='value(spec.containers[0].args)')
           echo "$ARGS" | grep -q -- '--host' && echo "$ARGS" | grep -q -- '--port' || { echo "worker args missing --host/--port: $ARGS"; exit 1; }
