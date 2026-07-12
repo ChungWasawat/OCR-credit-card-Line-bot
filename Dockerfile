@@ -9,7 +9,12 @@ FROM python:3.12-slim AS builder
 
 RUN pip install --no-cache-dir uv
 
-WORKDIR /build
+# WORKDIR matches the final stage's path (/app), not /build: uv bakes an
+# absolute shebang (#!/<workdir>/.venv/bin/python) into generated wrapper
+# scripts like .venv/bin/uvicorn. If the builder's venv path didn't match
+# where it's copied to below, that shebang would point at a path that
+# doesn't exist in the final image, and the container would fail to start.
+WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
@@ -21,9 +26,9 @@ FROM python:3.12-slim AS final
 RUN useradd --create-home --uid 1000 appuser
 WORKDIR /app
 
-COPY --from=builder /build/.venv /app/.venv
-COPY --from=builder /build/app /app/app
-COPY --from=builder /build/services /app/services
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/app /app/app
+COPY --from=builder /app/services /app/services
 
 ENV PATH="/app/.venv/bin:$PATH"
 USER appuser

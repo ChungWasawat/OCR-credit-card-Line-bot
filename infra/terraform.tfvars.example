@@ -1,0 +1,24 @@
+# Copy this file to terraform.tfvars (gitignored) and fill in sheet_id.
+# Everything else below is already a real, non-secret value for this project.
+
+gcp_project = "line-credit-card-ocr-bot"
+region      = "asia-southeast1"
+
+# From your .env — the only value you need to fill in yourself.
+sheet_id = "REPLACE_WITH_SHEET_ID"
+
+gcs_bucket  = "line-ocr-bot-receipts"
+github_repo = "ChungWasawat/OCR-credit-card-Line-bot"
+
+billing_account_id   = "012756-F90E95-298570"
+alert_email          = "messibarca852@gmail.com"
+budget_currency_code = "THB"
+budget_amount_units  = "100"
+
+allowed_group_id = ""       # filled in during Task 12
+ocr_model        = "gemini" # verified free path; switch to "claude" once Anthropic billing is set up
+
+# Phase gate — leave false for Phase 1 (core infra). After Phase 1.5
+# (secret versions added + docker image pushed to Artifact Registry),
+# flip to true and re-apply to create the two Cloud Run services.
+deploy_services = false
