@@ -114,6 +114,20 @@ def task(
             # re-paying for OCR. delete_image is best-effort and never raises.
             image_store.delete_image(blob_name)
             return {"status": "content_error"}
+        # Positive log evidence for a successful OCR call: exactly one of {this INFO
+        # line, the WARNING above} fires per OCR execution, so "exactly one LLM call"
+        # (e.g. non-receipt/blurry-photo scenarios) becomes something a trace can
+        # count instead of only inferring from an absence of retries.
+        logger.info(
+            "ocr result",
+            extra={
+                "message_id": body.message_id,
+                "is_receipt": extraction.is_receipt,
+                "amount": extraction.amount,
+                "ocr_model": provider.name,
+                "quality_issue": extraction.quality_issue,
+            },
+        )
         # Any other exception from get_ocr_provider().extract() (e.g. a network/timeout/
         # 5xx error from the LLM call) is NOT caught here — propagates to the outer
         # except below. Matches Task 6's "raw propagation for retry-classification"

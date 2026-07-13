@@ -51,13 +51,22 @@ def _enqueue(action: Enqueue, tasks_client: tasks_v2.CloudTasksClient) -> None:
         user_id=action.user_id,
         reply_token=action.reply_token,
     ).model_dump_json().encode("utf-8")
-    create_http_task(
+    created = create_http_task(
         name=action.webhook_event_id,
         url=f"{os.environ['WORKER_URL'].rstrip('/')}/task",
         body=body,
         service_account_email=os.environ["RECEIPT_BOT_SA_EMAIL"],
         client=tasks_client,
     )
+    # Positive log evidence for a normal send: the worker's own logs (Task 9/16) only
+    # fire on error/warning paths, so tracing "did this message even get enqueued" by
+    # message_id had no INFO-level line to find before this. create_http_task already
+    # logs its own "duplicate delivery collapsed" line when created is False.
+    if created:
+        logger.info(
+            "enqueued task",
+            extra={"message_id": action.message_id, "webhook_event_id": action.webhook_event_id},
+        )
 
 
 async def get_body(request: Request) -> bytes:

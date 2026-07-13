@@ -102,12 +102,13 @@ def test_callback_empty_events_returns_200():
     assert resp.status_code == 200
 
 
-def test_callback_image_event_creates_task_returns_200():
+def test_callback_image_event_creates_task_returns_200(caplog):
     store = MagicMock()
     tasks_client = _tasks_client()
     client = _client(store=store, tasks_client=tasks_client)
 
-    resp = _post(client, "image_message.json")
+    with caplog.at_level("INFO"):
+        resp = _post(client, "image_message.json")
 
     assert resp.status_code == 200
     tasks_client.create_task.assert_called_once()
@@ -120,16 +121,25 @@ def test_callback_image_event_creates_task_returns_200():
     assert body_json["reply_token"] == "tok-image-1"
     assert body_json["group_id"] == GROUP_ID
     store.append_receipt.assert_not_called()
+    # Positive log evidence for tracing a normal send by message_id (Task 12 tooling).
+    enqueued = [r for r in caplog.records if r.message == "enqueued task"]
+    assert len(enqueued) == 1
+    assert enqueued[0].message_id == "msg-image-1"
+    assert enqueued[0].webhook_event_id == "01WHIMAGE0000000000000001"
 
 
-def test_callback_duplicate_webhook_event_id_swallowed_still_200():
+def test_callback_duplicate_webhook_event_id_swallowed_still_200(caplog):
     tasks_client = _tasks_client()
     tasks_client.create_task.side_effect = AlreadyExists("duplicate")
     client = _client(tasks_client=tasks_client)
 
-    resp = _post(client, "duplicate_image_message.json")
+    with caplog.at_level("INFO"):
+        resp = _post(client, "duplicate_image_message.json")
 
     assert resp.status_code == 200
+    # No "enqueued task" line for a collapsed duplicate — only create_http_task's own
+    # "duplicate delivery collapsed" line fires.
+    assert not [r for r in caplog.records if r.message == "enqueued task"]
 
 
 def test_callback_card_postback_replies_synchronously():

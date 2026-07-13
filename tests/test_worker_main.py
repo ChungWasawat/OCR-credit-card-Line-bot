@@ -88,7 +88,7 @@ def _wire(
     return TestClient(worker_main.app, raise_server_exceptions=False)
 
 
-def test_task_happy_path_valid_receipt_returns_200(monkeypatch):
+def test_task_happy_path_valid_receipt_returns_200(monkeypatch, caplog):
     store = MagicMock()
     store.read_cards.return_value = [
         Card(card_id="Card_A1", bank="Bank A", card_name="Plat", last4="1234", expiry="12/27")
@@ -104,7 +104,8 @@ def test_task_happy_path_valid_receipt_returns_200(monkeypatch):
         image_store=image_store, ocr_provider=ocr_provider,
     )
 
-    resp = client.post("/task", json=_body())
+    with caplog.at_level("INFO"):
+        resp = client.post("/task", json=_body())
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
@@ -117,6 +118,13 @@ def test_task_happy_path_valid_receipt_returns_200(monkeypatch):
     quick_reply_data = sent_request.messages[0].quick_reply.items[0].action.data
     assert decode(quick_reply_data).ocr_model == "claude"
     image_store.delete_image.assert_not_called()
+    # Positive log evidence for tracing a normal OCR success by message_id (Task 12
+    # tooling) — exactly one such line per OCR execution.
+    ocr_results = [r for r in caplog.records if r.message == "ocr result"]
+    assert len(ocr_results) == 1
+    assert ocr_results[0].message_id == "msg-1"
+    assert ocr_results[0].is_receipt is True
+    assert ocr_results[0].ocr_model == "claude"
 
 
 def test_task_uploads_to_gcs_before_running_ocr(monkeypatch):
@@ -147,7 +155,7 @@ def test_task_sender_defaults_to_unknown_when_user_id_none(monkeypatch):
     line_api.reply_message.assert_called_once()
 
 
-def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypatch):
+def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypatch, caplog):
     store = MagicMock()
     line_api = MagicMock()
     image_store = MagicMock()
@@ -158,7 +166,8 @@ def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypat
         ocr_provider=ocr_provider,
     )
 
-    resp = client.post("/task", json=_body())
+    with caplog.at_level("INFO"):
+        resp = client.post("/task", json=_body())
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "content_error"}
@@ -167,6 +176,9 @@ def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypat
     assert "Couldn't read" in sent_request.messages[0].text
     store.read_cards.assert_not_called()
     image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
+    # Content errors must not emit the success-path "ocr result" line — exactly one of
+    # {WARNING, this INFO} per OCR execution, never both.
+    assert not [r for r in caplog.records if r.message == "ocr result"]
 
 
 def test_task_ocr_image_error_replies_cannot_read_returns_200_no_retry(monkeypatch):
