@@ -1,5 +1,5 @@
 flowchart TD
-    User["Family member<br/>LINE app"] -->|"photo / button tap"| LineAPI["LINE Messaging API"]
+    User["Group member<br/>LINE app"] -->|"photo / button tap"| LineAPI["LINE Messaging API"]
     LineAPI -->|"webhook POST /callback"| Webhook["webhook-service<br/>Cloud Run, public"]
 
     subgraph GCP["Google Cloud"]

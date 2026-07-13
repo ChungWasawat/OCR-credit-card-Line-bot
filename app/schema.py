@@ -117,7 +117,7 @@ def check_bounds(
     """Sanity bounds: 0 < amount <= 100000; date within -90d..+1d. Caller decides WHEN
     to enforce this (is_receipt True, or user tapped Process anyway) — this function has
     no is_receipt awareness. These are internal codes, not user-facing text — translate
-    them before showing anything to a family member.
+    them before showing anything to a group member.
     """
     today = today or dt.datetime.now(BANGKOK_TZ).date()
     violations: list[BoundsViolation] = []

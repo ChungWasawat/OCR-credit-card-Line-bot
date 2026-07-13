@@ -44,7 +44,7 @@ def upload_image(
 
     `view_link` uses the authenticated-browser endpoint (storage.cloud.google.com), not
     the public REST endpoint (storage.googleapis.com) — visibility is via per-account IAM
-    (roles/storage.objectViewer granted to family accounts on the bucket), and only the
+    (roles/storage.objectViewer granted to group members' accounts on the bucket), and only the
     authenticated endpoint checks the signed-in browser account against that IAM grant.
 
     Idempotent-create: a Cloud Tasks retry of an attempt that failed AFTER this upload

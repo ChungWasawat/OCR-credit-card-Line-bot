@@ -116,7 +116,7 @@ flagged unfairly.
 
 ## Step 5 — Decide & record
 
-**Decision priority for this project** (a 4-user family expense tracker, where a
+**Decision priority for this project** (a small-group (<10 users) expense tracker, where a
 wrong number silently corrupts a shared Sheet — see `docs/abnormal_photo_scenarios.md`
 for the related silent-wrong-data risk):
 

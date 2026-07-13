@@ -1,6 +1,6 @@
 # OCR-credit-card-Line-bot
 
-A family expense-tracking bot that runs in one dedicated [LINE](https://line.me) group
+A small-group expense-tracking bot that runs in one dedicated [LINE](https://line.me) group
 chat. Send a photo of a credit-card receipt, tap which card and category it belongs to,
 and it lands as a row in a Google Sheet with a proof-of-purchase image link — no manual
 data entry.
@@ -17,7 +17,7 @@ data entry.
 - [Multi-tenant design (not built)](#multi-tenant-design-not-built)
 - [Prompt-injection containment](#prompt-injection-containment)
 - [Known limitations](#known-limitations)
-- [Family usage notes](#family-usage-notes)
+- [Usage notes](#usage-notes)
 - [Future features](#future-features)
 - [Setup guide](#setup-guide)
 - [Model comparison](#model-comparison)
@@ -25,24 +25,25 @@ data entry.
 
 ## Overview
 
-Built for a household of up to 4 people sharing credit cards, in one dedicated
-receipts-only LINE group (keeps casual family photos from ever reaching the OCR call).
+Built for a small group (fewer than 10 people) sharing credit cards, in one dedicated
+receipts-only LINE group (keeps casual personal photos from ever reaching the OCR call).
 A photo comes in, an LLM vision model extracts the merchant/amount/date/last-4-digits,
 the sender picks a card and category via tap buttons, and the row is appended to that
 card's tab in Google Sheets with a link back to the original photo in Cloud Storage.
 
-It serves two purposes: it's the tool the family actually uses, and it's a deliberately
+It serves two purposes: it's the tool the group actually uses, and it's a deliberately
 over-engineered-for-its-scale showcase of production patterns (least-privilege IAM,
 infrastructure as code, CI/CD via Workload Identity Federation, idempotent task
 processing, structured observability) built to run entirely inside GCP's free tier.
 Things a "real" system at this scale would reach for — Kubernetes, Pub/Sub, Redis,
-Firestore, an API gateway — are deliberately absent; 4 users don't justify any of them.
+Firestore, an API gateway — are deliberately absent; a handful of users doesn't justify
+any of them.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    User["Family member<br/>LINE app"] -->|"photo / button tap"| LineAPI["LINE Messaging API"]
+    User["Group member<br/>LINE app"] -->|"photo / button tap"| LineAPI["LINE Messaging API"]
     LineAPI -->|"webhook POST /callback"| Webhook["webhook-service<br/>Cloud Run, public"]
 
     subgraph GCP["Google Cloud"]
@@ -200,8 +201,8 @@ Both services are stateless — all state either rides inside a LINE postback's 
 field (the pending receipt's fields, pipe-delimited with per-field percent-escaping —
 chosen over base64/URL-encoding because Thai text would balloon 4–9x under those,
 against LINE's 300-character limit) or lives in Sheets/GCS. `max-instances=3` on both
-Cloud Run services is a **deliberate cost guardrail**, not a real scale need at 4
-users. The documented
+Cloud Run services is a **deliberate cost guardrail**, not a real scale need at this
+user count (fewer than 10). The documented
 bottleneck at any real scale would be Google Sheets' own write-quota (roughly 60
 writes/min per the design notes) — the `ReceiptStore` interface exists specifically so
 a future migration off Sheets doesn't touch any business logic, just a new
@@ -223,12 +224,12 @@ dedicated group is the volume control, `is_receipt` is the backstop.
 
 Deliberately unbuilt — the checklist calls this out as a design exercise, not a
 roadmap item. This bot hardcodes a single tenant: one `ALLOWED_GROUP_ID`, one Sheet, one
-GCS bucket. Supporting multiple independent family groups would need:
+GCS bucket. Supporting multiple independent groups would need:
 
 - `ALLOWED_GROUP_ID` (single value) → a lookup table (group ID → tenant config), likely
   a small Firestore/Sheets-backed mapping rather than another env var per tenant.
 - Either a separate Sheet + bucket per tenant (simplest, matches the current
-  single-Sheet-per-family model, but doesn't scale past a handful of tenants), or a
+  single-Sheet-per-group model, but doesn't scale past a handful of tenants), or a
   shared Sheet/bucket with a tenant partition key on every row/object name.
 - Per-tenant secret isolation if tenants ever bring their own LINE channel — currently
   one LINE channel serves the one group.
@@ -273,7 +274,7 @@ not prompt-based:
   [`docs/abnormal_photo_scenarios.md`](docs/abnormal_photo_scenarios.md)'s "not
   addressed" section for the full list and why they're an accepted risk at this scale.
 
-## Family usage notes
+## Usage notes
 
 (Pinned in the group chat)
 
@@ -286,9 +287,15 @@ not prompt-based:
 
 ## Future features
 
-**Power/water bill tracking**, considered and descoped: a different data shape
-(provider, billing period — no card), which would need its own spreadsheet rather than
-reusing the receipt Card tabs. Not built.
+**Image pre-processing before OCR** — a cheap, deterministic cleanup pass (deskew,
+crop-to-receipt, contrast/exposure normalization, denoise) run on the photo before it
+reaches the vision model, targeting the "longer tail of image-quality issues" in
+[Known limitations](#known-limitations) (faded thermal paper, heavy compression
+artifacts, mild blur/rotation) that currently fall straight through to a "couldn't read
+that photo" reply. Worth measuring against `scripts/compare_models.py`'s methodology
+before committing to it — the OCR models may already be robust enough that a
+pre-processing step buys little accuracy for the added latency and code surface. Not
+built.
 
 ## Setup guide
 

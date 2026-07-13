@@ -1,7 +1,7 @@
 # Abnormal photo scenarios — behavior and classification
 
 Companion reference to `problems_and_fixes.md`'s Task 15/16 entries. Answers, for every
-kind of "bad" receipt photo a family member might send: what the bot does today, what it
+kind of "bad" receipt photo a group member might send: what the bot does today, what it
 does after the fixes in this task, and whether the failure is something the *user* can fix
 by retaking the photo, or something only the *owner* can fix (billing, config, quota).
 

@@ -34,7 +34,7 @@ resource "google_cloud_run_v2_service" "webhook" {
     service_account = google_service_account.receipt_bot.email
     timeout         = "60s"  # webhook must always respond well under Line's own timeout
     scaling {
-      max_instance_count = 3  # cost guardrail, not a real scale need at 4 users
+      max_instance_count = 3  # cost guardrail, not a real scale need at this user count (<10)
       min_instance_count = 0  # scale to zero when idle; explicit to match the API's own
                                # reported default and avoid perpetual plan drift
     }
