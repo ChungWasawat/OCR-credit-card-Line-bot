@@ -35,7 +35,7 @@ from app.payload import (
     encode_fill_in,
 )
 from app.reply import Reply
-from app.schema import ReceiptExtraction
+from app.schema import QualityIssue, ReceiptExtraction
 from app.store import Card, TabNotFoundError
 
 GROUP_ID = "Callowedgroupidxxxxxxxxxxxxxxxxxxx"
@@ -539,3 +539,68 @@ def test_handle_ocr_result_valid_returns_card_buttons():
 
     assert "Pick a card" in reply.messages[0].text
     assert reply.messages[0].quick_reply is not None
+
+
+def test_handle_ocr_result_bounds_violation_with_quality_issue_adds_targeted_tip():
+    extraction = ReceiptExtraction(
+        is_receipt=True, date=None, merchant="X", amount=100.0, quality_issue=QualityIssue.DARK
+    )
+
+    reply = handle_ocr_result(
+        extraction,
+        message_id="msg-1",
+        blob="202607_msg-1.jpg",
+        sender="U1",
+        ocr_model="claude",
+        group_id=GROUP_ID,
+        reply_token="tok-1",
+        cards=_cards(),
+        today=dt.date(2026, 7, 12),
+    )
+
+    assert "too dark" in reply.messages[0].text
+
+
+def test_handle_ocr_result_not_a_receipt_ignores_quality_issue():
+    extraction = ReceiptExtraction(
+        is_receipt=False, merchant="Unknown", amount=None, quality_issue=QualityIssue.BLUR
+    )
+
+    reply = handle_ocr_result(
+        extraction,
+        message_id="msg-1",
+        blob="202607_msg-1.jpg",
+        sender="U1",
+        ocr_model="claude",
+        group_id=GROUP_ID,
+        reply_token="tok-1",
+        cards=_cards(),
+    )
+
+    assert "Doesn't look like a receipt" in reply.messages[0].text
+    assert reply.messages[0].quick_reply is not None
+
+
+def test_handle_ocr_result_valid_extraction_ignores_quality_issue():
+    extraction = ReceiptExtraction(
+        is_receipt=True,
+        date=dt.date(2026, 7, 10),
+        merchant="Big C",
+        amount=100.0,
+        last4="1234",
+        quality_issue=QualityIssue.GLARE,
+    )
+
+    reply = handle_ocr_result(
+        extraction,
+        message_id="msg-1",
+        blob="202607_msg-1.jpg",
+        sender="U1",
+        ocr_model="claude",
+        group_id=GROUP_ID,
+        reply_token="tok-1",
+        cards=_cards(),
+        today=dt.date(2026, 7, 12),
+    )
+
+    assert "Pick a card" in reply.messages[0].text

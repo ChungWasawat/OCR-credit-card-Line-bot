@@ -3,13 +3,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.ocr.base import (
+    EXTRACTION_RULES,
     OcrContentError,
     OcrImageError,
     OcrParseError,
+    blank_extraction,
     detect_mime,
     first_text_block,
     parse_llm_json,
 )
+from app.schema import ReceiptExtraction
 
 
 def test_parse_llm_json_clean():
@@ -77,3 +80,18 @@ def test_first_text_block_empty_content_raises_ocr_parse_error():
     response = SimpleNamespace(content=[])
     with pytest.raises(OcrParseError):
         first_text_block(response)
+
+
+def test_extraction_rules_mentions_quality_issue():
+    assert "quality_issue" in EXTRACTION_RULES
+
+
+def test_blank_extraction_validates_and_has_null_quality_issue():
+    extraction = ReceiptExtraction.model_validate(blank_extraction())
+    assert extraction.quality_issue is None
+
+
+def test_blank_extraction_returns_fresh_dict_per_call():
+    a, b = blank_extraction(), blank_extraction()
+    assert a == b
+    assert a is not b

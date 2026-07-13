@@ -16,7 +16,7 @@ from app.payload import (
     encode,
     encode_fill_in,
 )
-from app.schema import BoundsViolation
+from app.schema import BoundsViolation, QualityIssue
 from app.store import Card
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,15 @@ _BOUNDS_MESSAGES = {
     BoundsViolation.DATE_OUT_OF_RANGE: "date looks out of range",
 }
 
+_QUALITY_ADVICE = {
+    QualityIssue.BLUR: "the photo looks blurry — hold the camera steady",
+    QualityIssue.DARK: "the photo looks too dark — retake in better light",
+    QualityIssue.GLARE: "there's glare on the slip — retake without flash or reflections",
+    QualityIssue.ROTATED: "the slip looks rotated — retake with it upright",
+    QualityIssue.CROPPED: "part of the slip is cut off — fit the whole slip in the frame",
+    QualityIssue.PARTIAL: "only part of the slip is visible — fit the whole slip in the frame",
+}
+
 
 def summary_line(p: Payload) -> str:
     merchant = p.merchant or "?"
@@ -58,8 +67,14 @@ def _reasons(violations: list[BoundsViolation]) -> str:
     return ", ".join(_BOUNDS_MESSAGES.get(v, str(v)) for v in violations)
 
 
-def bounds_message(violations: list[BoundsViolation]) -> str:
-    return f"Cannot read this receipt clearly ({_reasons(violations)}). Please resend the photo."
+def bounds_message(
+    violations: list[BoundsViolation], quality_issue: QualityIssue | None = None
+) -> str:
+    base = f"Cannot read this receipt clearly ({_reasons(violations)})."
+    advice = _QUALITY_ADVICE.get(quality_issue)
+    if advice:
+        return f"{base} Tip: {advice}. Then resend the photo."
+    return f"{base} Please resend the photo."
 
 
 def process_anyway_blocked_message(violations: list[BoundsViolation]) -> str:

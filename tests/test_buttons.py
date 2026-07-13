@@ -25,7 +25,7 @@ from app.payload import (
     Payload,
     decode,
 )
-from app.schema import BoundsViolation
+from app.schema import BoundsViolation, QualityIssue
 from app.store import Card
 
 
@@ -196,6 +196,25 @@ def test_bounds_message_covers_each_violation_with_readable_text():
     for violation in BoundsViolation:
         msg = bounds_message([violation])
         assert violation.value not in msg  # translated, not the raw code
+        assert len(msg) > 0
+
+
+def test_bounds_message_without_quality_issue_unchanged():
+    msg = bounds_message([BoundsViolation.MISSING_AMOUNT])
+    assert msg == "Cannot read this receipt clearly (amount is missing). Please resend the photo."
+
+
+def test_bounds_message_with_quality_issue_adds_targeted_tip():
+    msg = bounds_message([BoundsViolation.MISSING_AMOUNT], quality_issue=QualityIssue.BLUR)
+    assert "amount is missing" in msg
+    assert "blurry" in msg
+    assert "resend the photo" in msg
+
+
+def test_bounds_message_covers_each_quality_issue_with_readable_tip():
+    for issue in QualityIssue:
+        msg = bounds_message([BoundsViolation.MISSING_DATE], quality_issue=issue)
+        assert "Tip:" in msg
         assert len(msg) > 0
 
 

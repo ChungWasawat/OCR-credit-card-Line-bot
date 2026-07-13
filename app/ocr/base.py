@@ -69,6 +69,10 @@ Fields, in this order:
     the installment rule below.
   last4: string (exactly 4 digits) or null — last 4 digits of the card number if printed.
   details: string — free-text notes (e.g. installment term); "" if none.
+  quality_issue: one of "blur", "dark", "glare", "rotated", "cropped", "partial", or
+    null — the main image-quality problem that stopped you reading any field with
+    confidence (cropped = an edge of the slip is cut off in the frame; partial = only a
+    fragment of the slip is visible). null when the image was readable.
 
 Installment / ผ่อนชำระ / IPP / Smart Pay / 0% plans: the slip shows both a monthly
 installment amount and a total purchase amount. Set "amount" to the TOTAL purchase amount
@@ -145,4 +149,5 @@ def blank_extraction() -> dict:
         "amount": None,
         "last4": None,
         "details": "",
+        "quality_issue": None,
     }

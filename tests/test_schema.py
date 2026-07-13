@@ -1,6 +1,12 @@
 import datetime
 
-from app.schema import BoundsViolation, ReceiptExtraction, check_bounds, normalize_be_year
+from app.schema import (
+    BoundsViolation,
+    QualityIssue,
+    ReceiptExtraction,
+    check_bounds,
+    normalize_be_year,
+)
 
 
 def test_valid_extraction_constructs():
@@ -145,3 +151,42 @@ def test_unparseable_date_becomes_none_not_a_validation_error():
     extraction = ReceiptExtraction(date="not a date")
 
     assert extraction.date is None
+
+
+def test_quality_issue_defaults_to_none():
+    extraction = ReceiptExtraction(is_receipt=True, date="2026-03-05", amount=100)
+
+    assert extraction.quality_issue is None
+
+
+def test_quality_issue_coerces_from_string():
+    extraction = ReceiptExtraction(quality_issue="blur")
+
+    assert extraction.quality_issue is QualityIssue.BLUR
+
+
+def test_quality_issue_garbage_becomes_none_not_a_validation_error():
+    extraction = ReceiptExtraction(quality_issue="not a real issue")
+
+    assert extraction.quality_issue is None
+
+
+def test_quality_issue_none_string_becomes_none():
+    extraction = ReceiptExtraction(quality_issue="none")
+
+    assert extraction.quality_issue is None
+
+
+def test_old_six_key_dict_without_quality_issue_still_validates():
+    extraction = ReceiptExtraction.model_validate(
+        {
+            "is_receipt": True,
+            "date": "2026-03-05",
+            "merchant": "Big C",
+            "amount": 199.5,
+            "last4": "1234",
+            "details": "",
+        }
+    )
+
+    assert extraction.quality_issue is None

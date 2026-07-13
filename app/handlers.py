@@ -291,7 +291,9 @@ def handle_ocr_result(
         return Reply(
             reply_token=reply_token,
             group_id=group_id,
-            messages=[TextMessage(text=bounds_message(violations))],
+            messages=[
+                TextMessage(text=bounds_message(violations, extraction.quality_issue))
+            ],
         )
 
     text = f"Pick a card — {summary_line(p)}"

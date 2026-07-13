@@ -19,6 +19,19 @@ class BoundsViolation(enum.StrEnum):
     DATE_OUT_OF_RANGE = "date_out_of_range"
 
 
+class QualityIssue(enum.StrEnum):
+    """The main image-quality problem the model reports when it couldn't confidently
+    read the receipt — drives targeted retake advice (see app/buttons.py::bounds_message).
+    """
+
+    BLUR = "blur"
+    DARK = "dark"
+    GLARE = "glare"
+    ROTATED = "rotated"
+    CROPPED = "cropped"
+    PARTIAL = "partial"
+
+
 def normalize_be_year(d: dt.date, *, today: dt.date | None = None) -> dt.date:
     """Corrects a Buddhist Era year an LLM failed to convert to CE, as a safety net
     alongside the prompt's own BE->CE instruction. Only fires when the year is
@@ -51,6 +64,7 @@ class ReceiptExtraction(BaseModel):
     amount: float | None = None
     last4: str | None = None
     details: str | None = None
+    quality_issue: QualityIssue | None = None
 
     @field_validator("date", mode="before")
     @classmethod
@@ -85,6 +99,16 @@ class ReceiptExtraction(BaseModel):
     @classmethod
     def _fix_be_year(cls, v: dt.date | None) -> dt.date | None:
         return normalize_be_year(v) if v is not None else v
+
+    @field_validator("quality_issue", mode="before")
+    @classmethod
+    def _coerce_quality_issue(cls, v: object) -> object:
+        if v is None or isinstance(v, QualityIssue):
+            return v
+        try:
+            return QualityIssue(str(v).strip().lower())
+        except ValueError:
+            return None
 
 
 def check_bounds(
