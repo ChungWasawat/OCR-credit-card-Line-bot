@@ -58,6 +58,21 @@ class Enqueue:
     reply_token: str
 
 
+@dataclass(frozen=True)
+class CancelCleanup:
+    """STEP_CANCEL: webhook_main deletes the already-uploaded GCS image (best-effort)
+    then sends `reply`. A dedicated action, not a Reply, because route_event never
+    touches the network — the caller owns the delete, same split as Enqueue.
+
+    Cancel can never orphan a written row: only _write_and_confirm appends rows
+    (STEP_SKIP / typed details), and the "Recorded ✓" reply carries no quick reply, so
+    no Cancel button exists after a write.
+    """
+
+    blob: str
+    reply: Reply
+
+
 def _group_id(event: object) -> str | None:
     source = getattr(event, "source", None)
     if isinstance(source, GroupSource):
@@ -69,7 +84,7 @@ def allowed_group_id() -> str:
     return os.environ.get("ALLOWED_GROUP_ID", "")
 
 
-def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | None:
+def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | CancelCleanup | None:
     """Routes one already-parsed Line webhook event. Never touches the network —
     returns an action for the caller (Task 8's webhook_main) to execute.
     """
@@ -174,7 +189,7 @@ def _handle_typed_details(
 
 def _handle_postback(
     p: Payload, *, group_id: str, reply_token: str, store: ReceiptStore
-) -> Reply | None:
+) -> Reply | CancelCleanup | None:
     if p.step == STEP_CARD:
         text = f"Pick a category — {summary_line(p)}"
         return Reply(
@@ -227,7 +242,8 @@ def _handle_postback(
 
     if p.step == STEP_CANCEL:
         text = f"Cancelled — {summary_line(p)}"
-        return Reply(reply_token=reply_token, group_id=group_id, messages=[TextMessage(text=text)])
+        reply = Reply(reply_token=reply_token, group_id=group_id, messages=[TextMessage(text=text)])
+        return CancelCleanup(blob=p.blob, reply=reply)
 
     logger.warning("rejected postback with unknown step=%s", p.step)
     return None

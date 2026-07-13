@@ -19,6 +19,10 @@ class ImageStore(abc.ABC):
     @abc.abstractmethod
     def upload_image(self, image: bytes, filename: str) -> tuple[str, str]: ...
 
+    @abc.abstractmethod
+    def delete_image(self, blob_name: str) -> None:
+        """Best-effort: implementations must log-and-swallow failures, never raise."""
+
 
 def get_image_store() -> ImageStore:
     backend = os.environ.get("IMAGE_STORE", "gcs")

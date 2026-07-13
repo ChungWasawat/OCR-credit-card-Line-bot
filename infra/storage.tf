@@ -19,10 +19,24 @@ resource "google_storage_bucket" "receipts" {
   }
 }
 
-# Runtime SA can only CREATE new objects — never read, list, or delete
-# existing ones (least privilege; matches "SA only ever uploads new receipts").
-resource "google_storage_bucket_iam_member" "receipt_bot_object_creator" {
+# Custom role instead of roles/storage.objectCreator (create-only) or
+# roles/storage.objectAdmin (would add get/list/update): the runtime SA needs exactly
+# create (new receipt uploads) and delete (cancel-flow and failed-OCR cleanup,
+# app/gcs.py delete_image) — never read or list. Although create+delete technically
+# permits overwrite, the app forbids it: every upload passes if_generation_match=0
+# (create-only semantics, app/gcs.py).
+resource "google_project_iam_custom_role" "receipt_image_writer" {
+  role_id     = "receiptImageWriter"
+  title       = "Receipt Image Writer"
+  description = "Create and delete receipt objects only — no read, list, or metadata update"
+  permissions = [
+    "storage.objects.create",
+    "storage.objects.delete",
+  ]
+}
+
+resource "google_storage_bucket_iam_member" "receipt_bot_image_writer" {
   bucket = google_storage_bucket.receipts.name
-  role   = "roles/storage.objectCreator"
+  role   = google_project_iam_custom_role.receipt_image_writer.id
   member = "serviceAccount:${google_service_account.receipt_bot.email}"
 }

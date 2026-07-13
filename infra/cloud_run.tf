@@ -216,6 +216,14 @@ resource "google_cloud_run_v2_service" "worker" {
         name  = "OCR_MODEL"
         value = var.ocr_model
       }
+      # worker_main.py independently re-checks the group allowlist
+      # (defense-in-depth against a task somehow being enqueued with a
+      # non-allowlisted group_id) — this was missing here originally,
+      # causing every task to be rejected regardless of group_id.
+      env {
+        name  = "ALLOWED_GROUP_ID"
+        value = var.allowed_group_id
+      }
     }
   }
 

@@ -27,3 +27,10 @@ def test_gcs_store_delegates_to_gcs_upload_image():
 
     mock_upload.assert_called_once_with(b"x", "f.jpg")
     assert result == ("id1", "link1")
+
+
+def test_gcs_store_delegates_to_gcs_delete_image():
+    with patch("app.store_gcs.gcs_delete_image") as mock_delete:
+        GcsStore().delete_image("f.jpg")
+
+    mock_delete.assert_called_once_with("f.jpg")

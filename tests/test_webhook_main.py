@@ -53,14 +53,16 @@ def _tasks_client() -> MagicMock:
     return client
 
 
-def _client(*, store=None, line_api=None, tasks_client=None) -> TestClient:
+def _client(*, store=None, line_api=None, tasks_client=None, image_store=None) -> TestClient:
     store = store if store is not None else MagicMock()
     line_api = line_api if line_api is not None else MagicMock()
     tasks_client = tasks_client if tasks_client is not None else _tasks_client()
+    image_store = image_store if image_store is not None else MagicMock()
     webhook_main.app.dependency_overrides[webhook_main.get_store] = lambda: store
     webhook_main.app.dependency_overrides[webhook_main.get_line_api] = lambda: line_api
     webhook_main.app.dependency_overrides[webhook_main.get_tasks_client] = lambda: tasks_client
     webhook_main.app.dependency_overrides[webhook_main.get_parser] = lambda: WebhookParser(TEST_SECRET)
+    webhook_main.app.dependency_overrides[webhook_main.get_image_store] = lambda: image_store
     return TestClient(webhook_main.app)
 
 
@@ -190,7 +192,8 @@ def test_callback_skip_postback_append_receipt_fails_replies_error_not_recorded(
 def test_callback_cancel_postback_replies_no_write():
     line_api = MagicMock()
     store = MagicMock()
-    client = _client(store=store, line_api=line_api)
+    image_store = MagicMock()
+    client = _client(store=store, line_api=line_api, image_store=image_store)
 
     resp = _post(client, "cancel_postback.json")
 
@@ -199,6 +202,19 @@ def test_callback_cancel_postback_replies_no_write():
     line_api.reply_message.assert_called_once()
     sent_request = line_api.reply_message.call_args[0][0]
     assert "Cancelled" in sent_request.messages[0].text
+    image_store.delete_image.assert_called_once_with("202607_msg-image-1.jpg")
+
+
+def test_callback_card_postback_does_not_delete_image():
+    line_api = MagicMock()
+    store = MagicMock()
+    image_store = MagicMock()
+    client = _client(store=store, line_api=line_api, image_store=image_store)
+
+    resp = _post(client, "card_postback.json")
+
+    assert resp.status_code == 200
+    image_store.delete_image.assert_not_called()
 
 
 def test_callback_typed_details_text_message_writes_row():
@@ -257,8 +273,10 @@ def test_callback_non_allowlisted_group_no_reply_200(monkeypatch):
 
 
 def test_callback_unexpected_exception_in_one_event_does_not_abort_batch():
+    # 3 calls: card_postback's reply raises (1), triggering the best-effort failure
+    # reply (2), then the second event (cancel_postback) is still processed (3).
     line_api = MagicMock()
-    line_api.reply_message.side_effect = [RuntimeError("boom"), None]
+    line_api.reply_message.side_effect = [RuntimeError("boom"), None, None]
     store = MagicMock()
     client = _client(store=store, line_api=line_api)
 
@@ -277,4 +295,40 @@ def test_callback_unexpected_exception_in_one_event_does_not_abort_batch():
     )
 
     assert resp.status_code == 200
-    assert line_api.reply_message.call_count == 2
+    assert line_api.reply_message.call_count == 3
+    last_sent = line_api.reply_message.call_args_list[-1][0][0]
+    assert "Cancelled" in last_sent.messages[0].text
+
+
+def test_callback_enqueue_failure_sends_best_effort_error_reply():
+    from google.api_core.exceptions import InvalidArgument
+
+    line_api = MagicMock()
+    tasks_client = _tasks_client()
+    tasks_client.create_task.side_effect = InvalidArgument(
+        "The deadline cannot be more than 30s in the future."
+    )
+    client = _client(line_api=line_api, tasks_client=tasks_client)
+
+    resp = _post(client, "image_message.json")
+
+    assert resp.status_code == 200
+    line_api.reply_message.assert_called_once()
+    sent_request = line_api.reply_message.call_args[0][0]
+    assert "Something went wrong" in sent_request.messages[0].text
+
+
+def test_callback_enqueue_failure_and_reply_failure_still_200():
+    from google.api_core.exceptions import InvalidArgument
+
+    line_api = MagicMock()
+    line_api.reply_message.side_effect = RuntimeError("also down")
+    tasks_client = _tasks_client()
+    tasks_client.create_task.side_effect = InvalidArgument(
+        "The deadline cannot be more than 30s in the future."
+    )
+    client = _client(line_api=line_api, tasks_client=tasks_client)
+
+    resp = _post(client, "image_message.json")
+
+    assert resp.status_code == 200

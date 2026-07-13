@@ -7,10 +7,11 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from google.cloud import tasks_v2
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import MessagingApi
+from linebot.v3.messaging import MessagingApi, TextMessage
 from linebot.v3.webhook import WebhookParser
 
-from app.handlers import Enqueue, route_event
+from app.handlers import CancelCleanup, Enqueue, route_event
+from app.image_store import ImageStore, get_image_store
 from app.logging_setup import configure_logging
 from app.reply import Reply, default_messaging_api, send
 from app.store import ReceiptStore, SheetsStore
@@ -71,6 +72,7 @@ def callback(
     line_api: MessagingApi = Depends(get_line_api),
     tasks_client: tasks_v2.CloudTasksClient = Depends(get_tasks_client),
     parser: WebhookParser = Depends(get_parser),
+    image_store: ImageStore = Depends(get_image_store),
 ):
     # Deliberately a sync `def`: everything below (Sheets append/read, Cloud Tasks
     # create, Line reply) is blocking network I/O, so FastAPI must run this handler
@@ -86,6 +88,12 @@ def callback(
             action = route_event(event, store)
             if isinstance(action, Enqueue):
                 _enqueue(action, tasks_client)
+            elif isinstance(action, CancelCleanup):
+                # Delete before confirming so "Cancelled" is honest; delete_image is
+                # best-effort and never raises (app/gcs.py), so a GCS hiccup can't
+                # block the reply.
+                image_store.delete_image(action.blob)
+                send(line_api, action.reply)
             elif isinstance(action, Reply):
                 send(line_api, action)
         except Exception:
@@ -100,5 +108,26 @@ def callback(
                 exc_info=True,
                 extra={"webhook_event_id": getattr(event, "webhook_event_id", None)},
             )
+            # Best-effort failure signal to the user: this handler always returns 200,
+            # so Line never redelivers — without this, an enqueue failure (e.g. the
+            # Cloud Tasks clock-skew INVALID_ARGUMENT below) is pure silence. Only
+            # message/postback events carry a reply_token; anything else stays silent
+            # by design. Wrapped again: a second failure here must not abort the batch.
+            reply_token = getattr(event, "reply_token", None)
+            group_id = getattr(getattr(event, "source", None), "group_id", None)
+            if reply_token and group_id:
+                try:
+                    send(
+                        line_api,
+                        Reply(
+                            reply_token=reply_token,
+                            group_id=group_id,
+                            messages=[
+                                TextMessage(text="Something went wrong — please resend that.")
+                            ],
+                        ),
+                    )
+                except Exception:
+                    logger.warning("best-effort failure reply also failed", exc_info=True)
 
     return {"status": "ok"}

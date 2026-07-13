@@ -105,6 +105,11 @@ def task(
                     messages=[TextMessage(text="Couldn't read that photo — please resend.")],
                 ),
             )
+            # Cleanup AFTER the reply: if send() raises (429/5xx) it propagates for a
+            # Cloud Tasks retry with the blob still in place, and that retry's upload
+            # hits gcs.py's 412 already-uploaded path instead of re-uploading and
+            # re-paying for OCR. delete_image is best-effort and never raises.
+            image_store.delete_image(blob_name)
             return {"status": "content_error"}
         # Any other exception from get_ocr_provider().extract() (e.g. a network/timeout/
         # 5xx error from the LLM call) is NOT caught here — propagates to the outer

@@ -22,7 +22,7 @@ from app.buttons import (
     details_quick_reply,
     not_receipt_quick_reply,
 )
-from app.handlers import Enqueue, handle_ocr_result, route_event
+from app.handlers import CancelCleanup, Enqueue, handle_ocr_result, route_event
 from app.payload import (
     STEP_CANCEL,
     STEP_CARD,
@@ -440,8 +440,9 @@ def test_cancel_from_every_button_set_ends_flow_without_writing(monkeypatch, bui
 
     result = route_event(event, store)
 
-    assert isinstance(result, Reply)
-    assert "Cancelled" in result.messages[0].text
+    assert isinstance(result, CancelCleanup)
+    assert result.blob == p.blob
+    assert "Cancelled" in result.reply.messages[0].text
     store.append_receipt.assert_not_called()
 
 

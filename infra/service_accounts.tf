@@ -16,7 +16,9 @@
 # - Enqueue Cloud Tasks
 # - Invoke the worker service (scoped to that one service, not project-wide)
 # - Access secrets
-# - Upload (create-only) images to GCS
+# - Create and delete images in GCS (delete = cancel-flow and failed-OCR cleanup;
+#   no-overwrite is still enforced app-side via if_generation_match=0, and read/list
+#   were never granted)
 # - Write to Google Sheets (via Sheet-level sharing done manually in Task 5 —
 #   Sheets ACLs are not a Terraform-managed resource)
 

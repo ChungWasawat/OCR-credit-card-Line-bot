@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from google.api_core.exceptions import AlreadyExists, PermissionDenied
+from google.api_core.exceptions import AlreadyExists, PermissionDenied, ServiceUnavailable
 import pytest
 
 from app.tasks import create_http_task
@@ -44,7 +44,7 @@ def test_create_http_task_builds_expected_request():
         "receipt-bot@p.iam.gserviceaccount.com"
     )
     assert task.http_request.oidc_token.audience == "https://worker.example/task"
-    assert kwargs["timeout"] == 30.0
+    assert kwargs["timeout"] == 20.0
 
 
 def test_create_http_task_reads_project_region_queue_from_env(monkeypatch):
@@ -97,3 +97,60 @@ def test_create_http_task_propagates_other_errors():
             location="l",
             queue="q",
         )
+    assert client.create_task.call_count == 1
+
+
+def test_create_http_task_retries_once_on_transient_error_then_succeeds():
+    client = _client()
+    client.create_task.side_effect = [ServiceUnavailable("503"), None]
+
+    result = create_http_task(
+        name="wh-event-4",
+        url="https://worker.example/task",
+        body=b"{}",
+        service_account_email="sa@p.iam.gserviceaccount.com",
+        client=client,
+        project="p",
+        location="l",
+        queue="q",
+    )
+
+    assert result is True
+    assert client.create_task.call_count == 2
+
+
+def test_create_http_task_transient_error_twice_propagates():
+    client = _client()
+    client.create_task.side_effect = [ServiceUnavailable("503"), ServiceUnavailable("503")]
+
+    with pytest.raises(ServiceUnavailable):
+        create_http_task(
+            name="wh-event-5",
+            url="https://worker.example/task",
+            body=b"{}",
+            service_account_email="sa@p.iam.gserviceaccount.com",
+            client=client,
+            project="p",
+            location="l",
+            queue="q",
+        )
+    assert client.create_task.call_count == 2
+
+
+def test_create_http_task_already_exists_on_retry_collapses_as_duplicate():
+    client = _client()
+    client.create_task.side_effect = [ServiceUnavailable("503"), AlreadyExists("dup")]
+
+    result = create_http_task(
+        name="wh-event-6",
+        url="https://worker.example/task",
+        body=b"{}",
+        service_account_email="sa@p.iam.gserviceaccount.com",
+        client=client,
+        project="p",
+        location="l",
+        queue="q",
+    )
+
+    assert result is False
+    assert client.create_task.call_count == 2

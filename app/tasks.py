@@ -3,7 +3,12 @@ from __future__ import annotations
 import logging
 import os
 
-from google.api_core.exceptions import AlreadyExists
+from google.api_core.exceptions import (
+    AlreadyExists,
+    DeadlineExceeded,
+    InternalServerError,
+    ServiceUnavailable,
+)
 from google.cloud import tasks_v2
 from pydantic import BaseModel
 
@@ -14,6 +19,19 @@ logger = logging.getLogger(__name__)
 # google_cloud_tasks_queue.retry_config.max_attempts MUST be set to this same value —
 # if they drift, the ERROR/WARNING split fires on the wrong delivery attempt.
 MAX_ATTEMPTS = 3
+
+# Cloud Tasks rejects any gRPC deadline more than 30s in its own future, and gRPC
+# computes that deadline as this container's clock + timeout. A Cloud Run container
+# clock running even slightly fast turned timeout=30.0 into
+# InvalidArgument("The deadline cannot be more than 30s in the future") in production —
+# 20s keeps a 10s skew budget while still far exceeding the call's real latency.
+CREATE_TASK_TIMEOUT = 20.0
+
+# Only genuinely transient gRPC codes. InvalidArgument is deliberately absent: a
+# skew-induced deadline rejection recomputes the same bad deadline on an immediate
+# retry — CREATE_TASK_TIMEOUT's headroom is the fix for that, not retrying it.
+_TRANSIENT_ENQUEUE_ERRORS = (DeadlineExceeded, InternalServerError, ServiceUnavailable)
+_ENQUEUE_ATTEMPTS = 2
 
 
 class TaskBody(BaseModel):
@@ -45,8 +63,9 @@ def create_http_task(
     (same webhookEventId) attempting to create a task with the same name gets
     AlreadyExists from Cloud Tasks itself — swallowed here, returns False so the
     caller can log a "duplicate collapsed" line instead of treating it as an error.
-    Any other client error (permission, invalid argument, deadline) propagates
-    unmodified. Returns True if a new task was created.
+    Any other client error (permission, invalid argument) propagates unmodified after
+    one bounded retry for transient codes (see _TRANSIENT_ENQUEUE_ERRORS). Returns True
+    if a new task was created.
     """
     client = client or tasks_v2.CloudTasksClient()
     project = project or os.environ["GCP_PROJECT"]
@@ -66,9 +85,24 @@ def create_http_task(
             ),
         ),
     )
-    try:
-        client.create_task(request={"parent": parent, "task": task}, timeout=30.0)
-        return True
-    except AlreadyExists:
-        logger.info("task name=%s already exists, duplicate delivery collapsed", name)
-        return False
+    # Bounded in-process retry: there is no queue behind the webhook (Line never
+    # redelivers after a 200), so this is the only retry this path will ever get. It's
+    # safe because `name` is the idempotency key — if attempt 1 actually succeeded
+    # server-side and only the response was lost, attempt 2 gets AlreadyExists, handled
+    # below as the duplicate it is.
+    for attempt in range(1, _ENQUEUE_ATTEMPTS + 1):
+        try:
+            client.create_task(
+                request={"parent": parent, "task": task}, timeout=CREATE_TASK_TIMEOUT
+            )
+            return True
+        except AlreadyExists:
+            logger.info("task name=%s already exists, duplicate delivery collapsed", name)
+            return False
+        except _TRANSIENT_ENQUEUE_ERRORS:
+            if attempt == _ENQUEUE_ATTEMPTS:
+                raise
+            logger.warning(
+                "create_task transient failure on attempt %d/%d, retrying",
+                attempt, _ENQUEUE_ATTEMPTS, exc_info=True,
+            )

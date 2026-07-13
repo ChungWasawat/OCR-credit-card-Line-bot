@@ -115,6 +115,7 @@ def test_task_happy_path_valid_receipt_returns_200(monkeypatch):
     sent_request = line_api.reply_message.call_args[0][0]
     quick_reply_data = sent_request.messages[0].quick_reply.items[0].action.data
     assert decode(quick_reply_data).ocr_model == "claude"
+    image_store.delete_image.assert_not_called()
 
 
 def test_task_uploads_to_gcs_before_running_ocr(monkeypatch):
@@ -148,9 +149,13 @@ def test_task_sender_defaults_to_unknown_when_user_id_none(monkeypatch):
 def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypatch):
     store = MagicMock()
     line_api = MagicMock()
+    image_store = MagicMock()
     ocr_provider = MagicMock()
     ocr_provider.extract.side_effect = OcrParseError("model did not return JSON")
-    client = _wire(monkeypatch, store=store, line_api=line_api, ocr_provider=ocr_provider)
+    client = _wire(
+        monkeypatch, store=store, line_api=line_api, image_store=image_store,
+        ocr_provider=ocr_provider,
+    )
 
     resp = client.post("/task", json=_body())
 
@@ -160,11 +165,13 @@ def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypat
     sent_request = line_api.reply_message.call_args[0][0]
     assert "Couldn't read" in sent_request.messages[0].text
     store.read_cards.assert_not_called()
+    image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
 
 
 def test_task_validation_error_from_model_validate_replies_cannot_read_returns_200(monkeypatch):
     line_api = MagicMock()
-    client = _wire(monkeypatch, line_api=line_api)
+    image_store = MagicMock()
+    client = _wire(monkeypatch, line_api=line_api, image_store=image_store)
 
     def _raise_validation_error(*a, **k):
         raise ValidationError.from_exception_data("ReceiptExtraction", [])
@@ -176,6 +183,7 @@ def test_task_validation_error_from_model_validate_replies_cannot_read_returns_2
     assert resp.status_code == 200
     assert resp.json() == {"status": "content_error"}
     line_api.reply_message.assert_called_once()
+    image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
 
 
 def test_task_transient_error_downloading_image_propagates_500(monkeypatch):
@@ -228,6 +236,22 @@ def test_task_reply_send_failure_5xx_propagates_500(monkeypatch):
     resp = client.post("/task", json=_body())
 
     assert resp.status_code == 500
+
+
+def test_task_content_error_reply_send_failure_preserves_blob_for_retry(monkeypatch):
+    line_api = MagicMock()
+    line_api.reply_message.side_effect = ApiException(status=500, reason="Internal error")
+    image_store = MagicMock()
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = OcrParseError("model did not return JSON")
+    client = _wire(
+        monkeypatch, line_api=line_api, image_store=image_store, ocr_provider=ocr_provider
+    )
+
+    resp = client.post("/task", json=_body())
+
+    assert resp.status_code == 500
+    image_store.delete_image.assert_not_called()
 
 
 def test_task_malformed_body_returns_422(monkeypatch):
