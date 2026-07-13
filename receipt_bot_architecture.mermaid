@@ -1,0 +1,18 @@
+flowchart TD
+    User["Family member<br/>LINE app"] -->|"photo / button tap"| LineAPI["LINE Messaging API"]
+    LineAPI -->|"webhook POST /callback"| Webhook["webhook-service<br/>Cloud Run, public"]
+
+    subgraph GCP["Google Cloud"]
+        Webhook -->|"enqueue task<br/>name = webhookEventId"| Tasks["Cloud Tasks queue<br/>3 attempts, backoff"]
+        Tasks -->|"POST /task<br/>OIDC auth"| Worker["worker-service<br/>Cloud Run, private"]
+        Webhook -->|"sync write<br/>card/category/skip taps"| Sheets[("Google Sheets")]
+        Worker -->|"upload image<br/>create-only, if_generation_match=0"| GCS[("GCS bucket")]
+        Worker -->|"read cards"| Sheets
+        Webhook -.->|"read secrets"| Secrets[["Secret Manager"]]
+        Worker -.->|"read secrets"| Secrets
+    end
+
+    Worker -->|"download photo"| LineContent["LINE Content API"]
+    Worker -->|"vision call"| OCR{"OcrProvider<br/>claude / gemini / typhoon / typhoon_gemini"}
+    Worker -->|"reply / push"| LineAPI
+    Webhook -->|"reply"| LineAPI
