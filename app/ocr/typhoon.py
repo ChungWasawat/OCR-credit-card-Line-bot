@@ -7,10 +7,13 @@ import anthropic
 import openai
 
 from app.ocr.base import (
+    DETERMINISTIC_IMAGE_STATUSES,
     MARKDOWN_PROMPT_TEMPLATE,
+    OcrImageError,
     OcrProvider,
     blank_extraction,
     detect_mime,
+    first_text_block,
     parse_llm_json,
 )
 from app.ocr.claude import default_claude_client
@@ -32,9 +35,13 @@ PARSE_MODEL = "claude-haiku-4-5"
 
 
 class TyphoonOcrError(Exception):
-    """Wraps a failed Typhoon OCR call with a self-diagnosing message, since a bare
-    openai.APIStatusError from a client pointed at a non-OpenAI host is confusing on
-    its own.
+    """Wraps a 404 from the Typhoon OCR call with a self-diagnosing message, since a
+    bare openai.APIStatusError from a client pointed at a non-OpenAI host is confusing
+    on its own. A 404 here means the endpoint/model assumption this integration is
+    built on may be wrong — a config problem, not a content problem, so it is
+    deliberately NOT part of the OcrContentError family: it keeps propagating for a
+    Cloud Tasks retry (and Commit 2's final-attempt generic reply) rather than telling
+    the user to resend their photo, which would be the wrong advice.
     """
 
 
@@ -65,12 +72,19 @@ def ocr_markdown(image: bytes, client: openai.OpenAI) -> str:
             ],
         )
     except openai.APIStatusError as exc:
-        raise TyphoonOcrError(
-            f"Typhoon OCR call failed (HTTP {exc.status_code}). If 400/404: the "
-            f"assumption that model {TYPHOON_OCR_MODEL!r} works via "
-            "/v1/chat/completions may be wrong — see TODO(verify) in "
-            "app/ocr/typhoon.py"
-        ) from exc
+        if exc.status_code in DETERMINISTIC_IMAGE_STATUSES:
+            raise OcrImageError(
+                f"Typhoon OCR rejected the image (HTTP {exc.status_code})"
+            ) from exc
+        if exc.status_code == 404:
+            raise TyphoonOcrError(
+                f"Typhoon OCR call failed (HTTP {exc.status_code}). The assumption "
+                f"that model {TYPHOON_OCR_MODEL!r} works via /v1/chat/completions may "
+                "be wrong — see TODO(verify) in app/ocr/typhoon.py"
+            ) from exc
+        # Everything else (429 rate limit, 5xx) is transient — propagate raw so it
+        # retries, instead of the previous over-broad wrap into TyphoonOcrError.
+        raise
     return response.choices[0].message.content or ""
 
 
@@ -102,5 +116,4 @@ class TyphoonOcr(OcrProvider):
                 }
             ],
         )
-        text = next(block.text for block in response.content if block.type == "text")
-        return parse_llm_json(text)
+        return parse_llm_json(first_text_block(response))

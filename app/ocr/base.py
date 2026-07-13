@@ -7,12 +7,33 @@ from typing import ClassVar
 PNG_MAGIC = b"\x89PNG"
 
 
-class OcrParseError(Exception):
-    """Raised when the LLM's response isn't valid JSON after recovery attempts, or
-    isn't a JSON object. Same treatment as a downstream pydantic.ValidationError from
+class OcrContentError(Exception):
+    """Family root for deterministic, content-shaped OCR failures: retrying the same
+    image reproduces the same failure, so the worker replies "cannot read" and returns
+    200 (no Cloud Tasks retry) instead of propagating for a retry.
+    """
+
+
+class OcrParseError(OcrContentError):
+    """Raised when the LLM's response isn't valid JSON after recovery attempts, isn't a
+    JSON object, or carried no text block at all (e.g. a safety refusal). Same
+    treatment as a downstream pydantic.ValidationError from
     ReceiptExtraction.model_validate: both are content errors (reply "cannot read", no
     Cloud Tasks retry), never transient errors.
     """
+
+
+class OcrImageError(OcrContentError):
+    """Raised when the OCR provider's API deterministically rejected the image itself
+    (oversized payload, corrupt bytes, unsupported format) with a 4xx that would never
+    succeed on retry — same "cannot read" treatment as OcrParseError.
+    """
+
+
+# HTTP/API statuses that mean "this request body/image will never be accepted, no
+# matter how many times it's retried" — deliberately excludes 401/403/404 (config
+# errors the owner must fix, not the user) and 429 (transient rate limiting).
+DETERMINISTIC_IMAGE_STATUSES = frozenset({400, 413, 415, 422})
 
 
 class OcrProvider(abc.ABC):
@@ -71,6 +92,18 @@ noisy, partial, or contain layout artifacts from the OCR step — use your judge
 Receipt OCR markdown:
 {{markdown}}\
 """
+
+
+def first_text_block(response) -> str:
+    """Extracts the first text block from an Anthropic message response. Raises
+    OcrParseError instead of letting a bare StopIteration escape when the response
+    carries no text block at all (e.g. a safety refusal) — that's a content error, not
+    an unhandled exception that would propagate as if transient.
+    """
+    text = next((block.text for block in response.content if block.type == "text"), None)
+    if text is None:
+        raise OcrParseError("no text block in model response (possible refusal)")
+    return text
 
 
 def parse_llm_json(text: str) -> dict:

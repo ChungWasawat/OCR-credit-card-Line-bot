@@ -3,9 +3,18 @@ from __future__ import annotations
 import os
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.ocr.base import IMAGE_PROMPT, OcrParseError, OcrProvider, detect_mime, parse_llm_json
+from app.ocr.base import (
+    DETERMINISTIC_IMAGE_STATUSES,
+    IMAGE_PROMPT,
+    OcrImageError,
+    OcrParseError,
+    OcrProvider,
+    detect_mime,
+    parse_llm_json,
+)
 
 GEMINI_VISION_MODEL = "gemini-3.1-flash-lite"  # Verified against the real API
 # (2026-07-11) on the actual vision+JSON-extraction path (not just a bare text call):
@@ -41,13 +50,18 @@ class GeminiOcr(OcrProvider):
         self._client = client or default_gemini_client()
 
     def extract(self, image: bytes) -> dict:
-        response = self._client.models.generate_content(
-            model=GEMINI_VISION_MODEL,
-            contents=[
-                IMAGE_PROMPT,
-                types.Part.from_bytes(data=image, mime_type=detect_mime(image)),
-            ],
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=GEMINI_VISION_MODEL,
+                contents=[
+                    IMAGE_PROMPT,
+                    types.Part.from_bytes(data=image, mime_type=detect_mime(image)),
+                ],
+            )
+        except genai_errors.ClientError as exc:
+            if exc.code in DETERMINISTIC_IMAGE_STATUSES:
+                raise OcrImageError(f"Gemini rejected the image (HTTP {exc.code})") from exc
+            raise
         if not response.text:
             raise OcrParseError("empty Gemini response (possible safety block)")
         return parse_llm_json(response.text)

@@ -1,6 +1,15 @@
+from types import SimpleNamespace
+
 import pytest
 
-from app.ocr.base import OcrParseError, detect_mime, parse_llm_json
+from app.ocr.base import (
+    OcrContentError,
+    OcrImageError,
+    OcrParseError,
+    detect_mime,
+    first_text_block,
+    parse_llm_json,
+)
 
 
 def test_parse_llm_json_clean():
@@ -43,3 +52,28 @@ def test_detect_mime_png():
 
 def test_detect_mime_jpeg_default():
     assert detect_mime(b"\xff\xd8\xff\xe0...") == "image/jpeg"
+
+
+def test_ocr_parse_error_is_ocr_content_error():
+    assert issubclass(OcrParseError, OcrContentError)
+
+
+def test_ocr_image_error_is_ocr_content_error():
+    assert issubclass(OcrImageError, OcrContentError)
+
+
+def test_first_text_block_returns_text():
+    response = SimpleNamespace(content=[SimpleNamespace(type="text", text="hello")])
+    assert first_text_block(response) == "hello"
+
+
+def test_first_text_block_no_text_block_raises_ocr_parse_error():
+    response = SimpleNamespace(content=[SimpleNamespace(type="thinking", text=None)])
+    with pytest.raises(OcrParseError):
+        first_text_block(response)
+
+
+def test_first_text_block_empty_content_raises_ocr_parse_error():
+    response = SimpleNamespace(content=[])
+    with pytest.raises(OcrParseError):
+        first_text_block(response)

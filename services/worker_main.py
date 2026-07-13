@@ -19,7 +19,7 @@ from app.gcs import filename_for
 from app.handlers import allowed_group_id, handle_ocr_result
 from app.image_store import ImageStore, get_image_store
 from app.logging_setup import configure_logging
-from app.ocr.base import OcrParseError
+from app.ocr.base import OcrContentError
 from app.ocr.factory import get_ocr_provider
 from app.reply import Reply, send
 from app.schema import ReceiptExtraction
@@ -83,16 +83,19 @@ def task(
 
         # Content-error boundary: the one content-error path not already covered by
         # handle_ocr_result (which assumes a successfully constructed ReceiptExtraction).
-        # OcrParseError = the OCR provider couldn't recover JSON at all. ValidationError
-        # is defensive/near-unreachable given ReceiptExtraction's tolerant coercion, but
-        # still content-shaped (bad input, not a network problem) if it ever fires.
-        # This `return` exits before the outer except below — content errors are not
-        # transient failures and must not be logged/counted as a retry attempt.
+        # OcrContentError covers OcrParseError (unrecoverable JSON, or a response with
+        # no text block at all) and OcrImageError (the provider API deterministically
+        # rejected the image itself — oversized, corrupt, unsupported; retrying would
+        # reproduce the same rejection). ValidationError is defensive/near-unreachable
+        # given ReceiptExtraction's tolerant coercion, but still content-shaped (bad
+        # input, not a network problem) if it ever fires. This `return` exits before
+        # the outer except below — content errors are not transient failures and must
+        # not be logged/counted as a retry attempt.
         provider = get_ocr_provider()
         try:
             raw = provider.extract(image_bytes)
             extraction = ReceiptExtraction.model_validate(raw)
-        except (OcrParseError, ValidationError):
+        except (OcrContentError, ValidationError):
             logger.warning(
                 "unrecoverable OCR output, replying cannot-read",
                 extra={"message_id": body.message_id, "step": "ocr"},

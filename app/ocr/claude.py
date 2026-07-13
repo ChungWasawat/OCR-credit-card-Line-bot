@@ -4,7 +4,15 @@ import base64
 
 import anthropic
 
-from app.ocr.base import IMAGE_PROMPT, OcrProvider, detect_mime, parse_llm_json
+from app.ocr.base import (
+    DETERMINISTIC_IMAGE_STATUSES,
+    IMAGE_PROMPT,
+    OcrImageError,
+    OcrProvider,
+    detect_mime,
+    first_text_block,
+    parse_llm_json,
+)
 
 CLAUDE_VISION_MODEL = "claude-haiku-4-5"
 MAX_TOKENS = 1024
@@ -22,25 +30,31 @@ class ClaudeOcr(OcrProvider):
 
     def extract(self, image: bytes) -> dict:
         image_b64 = base64.standard_b64encode(image).decode("utf-8")
-        response = self._client.messages.create(
-            model=CLAUDE_VISION_MODEL,
-            max_tokens=MAX_TOKENS,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": detect_mime(image),
-                                "data": image_b64,
+        try:
+            response = self._client.messages.create(
+                model=CLAUDE_VISION_MODEL,
+                max_tokens=MAX_TOKENS,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": detect_mime(image),
+                                    "data": image_b64,
+                                },
                             },
-                        },
-                        {"type": "text", "text": IMAGE_PROMPT},
-                    ],
-                }
-            ],
-        )
-        text = next(block.text for block in response.content if block.type == "text")
-        return parse_llm_json(text)
+                            {"type": "text", "text": IMAGE_PROMPT},
+                        ],
+                    }
+                ],
+            )
+        except anthropic.APIStatusError as exc:
+            if exc.status_code in DETERMINISTIC_IMAGE_STATUSES:
+                raise OcrImageError(
+                    f"Claude rejected the image (HTTP {exc.status_code})"
+                ) from exc
+            raise
+        return parse_llm_json(first_text_block(response))

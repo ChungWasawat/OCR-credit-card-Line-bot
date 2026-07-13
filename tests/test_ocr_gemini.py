@@ -4,9 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.ocr.base import OcrParseError
+from app.ocr.base import OcrImageError, OcrParseError
 from app.ocr.gemini import GEMINI_VISION_MODEL, GeminiOcr, default_gemini_client
 
 
@@ -51,6 +52,26 @@ def test_extract_none_response_text_raises():
     client = _client_returning(None)
 
     with pytest.raises(OcrParseError):
+        GeminiOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+def test_extract_400_raises_ocr_image_error():
+    client = MagicMock()
+    client.models.generate_content.side_effect = genai_errors.ClientError(
+        400, {"error": {"message": "bad image"}}
+    )
+
+    with pytest.raises(OcrImageError):
+        GeminiOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+def test_extract_429_propagates_raw():
+    client = MagicMock()
+    client.models.generate_content.side_effect = genai_errors.ClientError(
+        429, {"error": {"message": "quota exceeded"}}
+    )
+
+    with pytest.raises(genai_errors.ClientError):
         GeminiOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
 
 

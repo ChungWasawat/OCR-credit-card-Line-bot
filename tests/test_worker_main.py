@@ -7,7 +7,8 @@ from linebot.v3.messaging.exceptions import ApiException
 from pydantic import ValidationError
 
 import services.worker_main as worker_main
-from app.ocr.base import OcrParseError
+from app.ocr.base import OcrImageError, OcrParseError
+from app.ocr.typhoon import TyphoonOcrError
 from app.payload import decode
 from app.schema import ReceiptExtraction
 from app.store import Card
@@ -166,6 +167,43 @@ def test_task_ocr_parse_error_replies_cannot_read_returns_200_no_retry(monkeypat
     assert "Couldn't read" in sent_request.messages[0].text
     store.read_cards.assert_not_called()
     image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
+
+
+def test_task_ocr_image_error_replies_cannot_read_returns_200_no_retry(monkeypatch):
+    store = MagicMock()
+    line_api = MagicMock()
+    image_store = MagicMock()
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = OcrImageError("Claude rejected the image (HTTP 400)")
+    client = _wire(
+        monkeypatch, store=store, line_api=line_api, image_store=image_store,
+        ocr_provider=ocr_provider,
+    )
+
+    resp = client.post("/task", json=_body())
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "content_error"}
+    line_api.reply_message.assert_called_once()
+    sent_request = line_api.reply_message.call_args[0][0]
+    assert "Couldn't read" in sent_request.messages[0].text
+    store.read_cards.assert_not_called()
+    image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
+
+
+def test_task_typhoon_ocr_error_propagates_500_not_content_error(monkeypatch):
+    # TyphoonOcrError (404 config/endpoint-assumption breakage) is NOT an
+    # OcrContentError — it must stay on the transient/retry path since "resend your
+    # photo" would be the wrong advice for a config problem.
+    image_store = MagicMock()
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TyphoonOcrError("Typhoon OCR call failed (HTTP 404)")
+    client = _wire(monkeypatch, image_store=image_store, ocr_provider=ocr_provider)
+
+    resp = client.post("/task", json=_body())
+
+    assert resp.status_code == 500
+    image_store.delete_image.assert_not_called()
 
 
 def test_task_validation_error_from_model_validate_replies_cannot_read_returns_200(monkeypatch):

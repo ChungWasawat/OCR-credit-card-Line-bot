@@ -3,9 +3,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import anthropic
+import httpx
 import pytest
 
-from app.ocr.base import OcrParseError
+from app.ocr.base import OcrImageError, OcrParseError
 from app.ocr.claude import CLAUDE_VISION_MODEL, MAX_TOKENS, ClaudeOcr, default_claude_client
 
 
@@ -55,6 +56,38 @@ def test_extract_non_json_response_raises():
     client = _client_returning("I cannot process this image.")
 
     with pytest.raises(OcrParseError):
+        ClaudeOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+def test_extract_no_text_block_raises_ocr_parse_error():
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="thinking", text=None)]
+    )
+
+    with pytest.raises(OcrParseError):
+        ClaudeOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+def _status_error(status_code: int) -> anthropic.APIStatusError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status_code=status_code, request=request)
+    return anthropic.APIStatusError("error", response=response, body=None)
+
+
+def test_extract_400_raises_ocr_image_error():
+    client = MagicMock()
+    client.messages.create.side_effect = _status_error(400)
+
+    with pytest.raises(OcrImageError):
+        ClaudeOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
+
+
+def test_extract_429_propagates_raw():
+    client = MagicMock()
+    client.messages.create.side_effect = _status_error(429)
+
+    with pytest.raises(anthropic.APIStatusError):
         ClaudeOcr(client).extract(b"\xff\xd8\xff\xe0fake-jpeg")
 
 
