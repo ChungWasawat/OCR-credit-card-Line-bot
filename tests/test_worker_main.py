@@ -365,6 +365,54 @@ def test_task_transient_failure_final_attempt_logs_error(monkeypatch, caplog):
     assert errors[0].max_attempts == 3
 
 
+def test_task_transient_failure_final_attempt_sends_best_effort_reply(monkeypatch, caplog):
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TimeoutError("llm timeout")
+    line_api = MagicMock()
+    client = _wire(monkeypatch, line_api=line_api, ocr_provider=ocr_provider)
+
+    with caplog.at_level(logging.WARNING):
+        resp = client.post(
+            "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "2"}
+        )
+
+    assert resp.status_code == 500
+    line_api.reply_message.assert_called_once()
+    sent_request = line_api.reply_message.call_args[0][0]
+    assert "Something went wrong" in sent_request.messages[0].text
+
+
+def test_task_transient_failure_non_final_attempt_sends_no_reply(monkeypatch):
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TimeoutError("llm timeout")
+    line_api = MagicMock()
+    client = _wire(monkeypatch, line_api=line_api, ocr_provider=ocr_provider)
+
+    resp = client.post(
+        "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "0"}
+    )
+
+    assert resp.status_code == 500
+    line_api.reply_message.assert_not_called()
+
+
+def test_task_transient_failure_final_attempt_reply_also_fails_still_500(monkeypatch, caplog):
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TimeoutError("llm timeout")
+    line_api = MagicMock()
+    line_api.reply_message.side_effect = ApiException(status=500, reason="Internal error")
+    client = _wire(monkeypatch, line_api=line_api, ocr_provider=ocr_provider)
+
+    with caplog.at_level(logging.WARNING):
+        resp = client.post(
+            "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "2"}
+        )
+
+    assert resp.status_code == 500
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("best-effort failure reply also failed" in r.message for r in warnings)
+
+
 def test_task_missing_retry_count_header_treated_as_first_attempt(monkeypatch, caplog):
     ocr_provider = MagicMock()
     ocr_provider.extract.side_effect = TimeoutError("llm timeout")

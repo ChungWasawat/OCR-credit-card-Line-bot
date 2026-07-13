@@ -162,4 +162,23 @@ def task(
                 "max_attempts": MAX_ATTEMPTS,
             },
         )
+        if is_final_attempt:
+            # Best-effort failure signal, mirroring webhook_main's catch-all: without
+            # this, an exhausted retry chain is pure silence for the user. The reply
+            # token is almost certainly expired/used by now (multiple LLM calls plus
+            # Cloud Tasks' own backoff far exceed the ~1-minute token lifetime) —
+            # send() falls back to push on Line's 400 "Invalid reply token". Wrapped in
+            # its own try/except so a second failure here can never mask the re-raise.
+            try:
+                line_api, _ = clients
+                send(
+                    line_api,
+                    Reply(
+                        reply_token=body.reply_token,
+                        group_id=body.group_id,
+                        messages=[TextMessage(text="Something went wrong — please resend that.")],
+                    ),
+                )
+            except Exception:
+                logger.warning("best-effort failure reply also failed", exc_info=True)
         raise
