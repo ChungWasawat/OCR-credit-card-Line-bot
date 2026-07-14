@@ -7,21 +7,23 @@ data entry.
 
 ## Table of contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Event flow](#event-flow)
-- [OCR provider design](#ocr-provider-design)
-- [Security model](#security-model)
-- [Idempotency & retry policy](#idempotency--retry-policy)
-- [Scale & cost](#scale--cost)
-- [Multi-tenant design (not built)](#multi-tenant-design-not-built)
-- [Prompt-injection containment](#prompt-injection-containment)
-- [Known limitations](#known-limitations)
-- [Usage notes](#usage-notes)
-- [Future features](#future-features)
-- [Setup guide](#setup-guide)
-- [Model comparison](#model-comparison)
-- [Related docs](#related-docs)
+- [OCR-credit-card-Line-bot](#ocr-credit-card-line-bot)
+  - [Table of contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Architecture](#architecture)
+  - [Event flow](#event-flow)
+  - [OCR provider design](#ocr-provider-design)
+  - [Security model](#security-model)
+  - [Idempotency \& retry policy](#idempotency--retry-policy)
+  - [Scale \& cost](#scale--cost)
+  - [Multi-tenant design (not built)](#multi-tenant-design-not-built)
+  - [Prompt-injection containment](#prompt-injection-containment)
+  - [Known limitations](#known-limitations)
+  - [Usage notes](#usage-notes)
+  - [Future features](#future-features)
+  - [Setup guide](#setup-guide)
+  - [Model comparison](#model-comparison)
+  - [Related docs](#related-docs)
 
 ## Overview
 
@@ -62,7 +64,7 @@ flowchart TD
     Webhook -->|"reply"| LineAPI
 ```
 
-(source: [`receipt_bot_architecture.mermaid`](receipt_bot_architecture.mermaid))
+(source: [`receipt_bot_architecture.mermaid`](misc/receipt_bot_architecture.mermaid))
 
 Two Cloud Run services, one queue between them:
 
