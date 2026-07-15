@@ -1,75 +1,139 @@
+# This workflow is GitHub Actions' config for CI/CD: it runs automatically
+# on GitHub's servers whenever code is pushed, and can build/test/deploy code.
 name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main]                              # only runs for pushes to main, not other branches
+    paths-ignore: ['docs/**', 'misc/**', '**.md']  # skip doc-only commits — nothing to deploy
 
+# Default GITHUB_TOKEN permissions for every job below, unless a job overrides
+# them. "contents: read" = can check out code, nothing more (least privilege).
 permissions:
   contents: read
 
+# If two pushes to main happen close together, run their deploys one at a
+# time (same "group") instead of in parallel ("cancel-in-progress: false"
+# means don't kill an in-flight deploy either — just queue behind it).
 concurrency:
   group: deploy-main
   cancel-in-progress: false
 
 jobs:
+  # First job: run the test suite. The second job won't start unless this passes.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15                 # kill the job if it hangs this long
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
-      - run: uv sync --frozen --group dev
-      - run: uv run pytest -q
+      - uses: actions/checkout@v4       # download the repo's code onto the runner
+      - uses: astral-sh/setup-uv@v3     # install "uv", the Python package manager this project uses
+      - run: uv sync --frozen --group dev  # install exact locked dependencies (incl. dev/test deps)
+      - run: uv run pytest -q           # run the test suite ("-q" = quiet output)
 
+  # Second job: build the Docker image and deploy it to Cloud Run.
   build-and-deploy:
-    needs: test
+    needs: test                         # only runs if the "test" job above succeeded
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
+      id-token: write                   # needed to mint a GitHub OIDC token for WIF auth to GCP (no stored keys)
     env:
+      # "vars.*" pulls from this repo's GitHub Actions variables (Settings > Actions > Variables) —
+      # not secrets, since none of these values are sensitive on their own.
       REGION: ${{ vars.REGION }}
       PROJECT_ID: ${{ vars.GCP_PROJECT }}
       IMAGE: ${{ vars.ARTIFACT_REGISTRY_URI }}/receipt-bot
     steps:
       - uses: actions/checkout@v4
 
+      # Exchange GitHub's own OIDC token for short-lived GCP credentials,
+      # impersonating the github-actions-deployer service account
+      # (infra/wif.tf). No Google key file ever touches this repo.
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.DEPLOYER_SA_EMAIL }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v2   # installs the gcloud CLI on the runner
 
+      # Let `docker push` authenticate to Artifact Registry using the GCP
+      # credentials from the auth step above.
       - run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push
         run: |
+          # One image serves both services — Cloud Run's per-service args
+          # (see infra/cloud_run.tf) pick which app runs inside it.
+          # Tag by commit SHA (what we actually deploy, immutable) and also
+          # "latest" (used only by Terraform's first-ever bootstrap deploy).
           docker build -t "${IMAGE}:${{ github.sha }}" -t "${IMAGE}:latest" .
           docker push "${IMAGE}:${{ github.sha }}"
           docker push "${IMAGE}:latest"
 
-      - name: Deploy webhook-service
+      # Env vars, secrets, and service account are intentionally NOT set on
+      # either deploy step below — gcloud run deploy inherits whatever isn't
+      # explicitly passed from the previous revision, and Terraform
+      # (infra/cloud_run.tf, Task 10) is the source of truth for that config.
+      # This step only ever changes the image.
+      #
+      # --no-traffic + --tag=candidate deploy the new revision WITHOUT
+      # sending it any live traffic yet. Without this, gcloud run deploy
+      # would immediately route 100% of real LINE/Cloud Tasks traffic to the
+      # new revision before the smoke tests below ever run — so a revision
+      # that starts cleanly but is logically broken (bad secret, code bug)
+      # would serve real users with no automatic way back. Deploying "dark"
+      # first and only flipping traffic after a health check fixes that.
+      - name: Deploy webhook-service (candidate, no traffic)
         run: |
           gcloud run deploy webhook-service \
             --image="${IMAGE}:${{ github.sha }}" \
-            --region="${REGION}" --project="${PROJECT_ID}" --quiet
+            --region="${REGION}" --project="${PROJECT_ID}" \
+            --no-traffic --tag=candidate --quiet
 
-      - name: Deploy worker-service
+      - name: Deploy worker-service (candidate, no traffic)
         run: |
           gcloud run deploy worker-service \
             --image="${IMAGE}:${{ github.sha }}" \
             --region="${REGION}" --project="${PROJECT_ID}" \
             --args=services.worker_main:app,--host,0.0.0.0,--port,8080 \
-            --quiet
+            --no-traffic --tag=candidate --quiet
 
-      - name: Smoke test — webhook rejects unsigned request
+      # --tag=candidate above gives the new (untrafficked) revision its own
+      # private URL, shaped like "https://candidate---webhook-service-xxx.run.app".
+      # We look that URL up via `describe` + jq, then hit it directly — this
+      # tests the actual new code, not whatever old revision still holds 100%
+      # of the public URL's traffic.
+      - name: Smoke test — webhook candidate rejects unsigned request
         run: |
-          URL=$(gcloud run services describe webhook-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.url)')
+          URL=$(gcloud run services describe webhook-service --region="${REGION}" --project="${PROJECT_ID}" --format=json \
+            | jq -r '.status.traffic[] | select(.tag=="candidate") | .url')
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/callback" -H 'Content-Type: application/json' -d '{}')
           test "$CODE" = "403" || { echo "expected 403, got $CODE"; exit 1; }
 
-      - name: Verify worker args (regression guard for the host/port bug)
+      # Regression guard for a past bug: worker-service's Dockerfile
+      # ENTRYPOINT is bare "uvicorn", so --args must always include
+      # --host/--port explicitly, or uvicorn silently binds 127.0.0.1 and
+      # fails Cloud Run's health check. This reads back the deployed
+      # revision's actual args to make sure that never regresses silently.
+      - name: Verify worker candidate args (regression guard for the host/port bug)
         run: |
           REV=$(gcloud run services describe worker-service --region="${REGION}" --project="${PROJECT_ID}" --format='value(status.latestReadyRevisionName)')
           ARGS=$(gcloud run revisions describe "$REV" --region="${REGION}" --project="${PROJECT_ID}" --format='value(spec.containers[0].args)')
           echo "$ARGS" | grep -q -- '--host' && echo "$ARGS" | grep -q -- '--port' || { echo "worker args missing --host/--port: $ARGS"; exit 1; }
+
+      # Both candidates passed their checks — now, and only now, send them
+      # 100% of live traffic. Promoting both together (instead of promoting
+      # each right after its own deploy step) means webhook-service and
+      # worker-service are never live on mismatched versions of each other.
+      #
+      # If either smoke test above failed, `run:` steps stop the job right
+      # there (GitHub Actions default) and these two steps never execute —
+      # so the previous, known-good revision simply keeps 100% of traffic.
+      # That's the whole rollback story: rollback is "do nothing", by
+      # construction, rather than a separate step that could itself fail.
+      - name: Promote webhook-service to 100% traffic
+        run: gcloud run services update-traffic webhook-service --region="${REGION}" --project="${PROJECT_ID}" --to-latest --quiet
+
+      - name: Promote worker-service to 100% traffic
+        run: gcloud run services update-traffic worker-service --region="${REGION}" --project="${PROJECT_ID}" --to-latest --quiet
