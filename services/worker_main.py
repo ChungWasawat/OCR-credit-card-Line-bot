@@ -16,7 +16,7 @@ from linebot.v3.messaging import (
 from pydantic import ValidationError
 
 from app.gcs import filename_for
-from app.handlers import allowed_group_id, handle_ocr_result
+from app.handlers import CleanupReply, allowed_group_id, handle_ocr_result
 from app.image_store import ImageStore, get_image_store
 from app.logging_setup import configure_logging
 from app.ocr.base import OcrContentError
@@ -64,6 +64,10 @@ def task(
         )
         return {"status": "rejected"}
 
+    # Tracked outside the try so the outer except's final-attempt cleanup (below) knows
+    # whether an upload ever happened — None means the failure was before any blob
+    # existed (nothing to delete).
+    blob_name: str | None = None
     try:
         line_api, blob_api = clients
 
@@ -137,7 +141,7 @@ def task(
         # receipt. No try/except.
         cards = store.read_cards()
 
-        reply = handle_ocr_result(
+        result = handle_ocr_result(
             extraction,
             message_id=body.message_id,
             blob=blob_name,
@@ -151,7 +155,14 @@ def task(
         # contract) — that propagation is preserved here unmodified, so a 429/5xx on the
         # final reply also triggers a Cloud Tasks retry rather than silently dropping the
         # receipt after OCR already succeeded.
-        send(line_api, reply)
+        if isinstance(result, CleanupReply):
+            send(line_api, result.reply)
+            # Delete AFTER the reply, mirroring the OcrContentError branch above: if
+            # send() raises, the blob must still be there for the Cloud Tasks retry's
+            # upload to hit the 412 already-uploaded path.
+            image_store.delete_image(result.blob)
+        else:
+            send(line_api, result)
         return {"status": "ok"}
     except Exception:
         # X-CloudTasks-TaskRetryCount is 0-indexed (0 = first delivery, no retries
@@ -195,4 +206,10 @@ def task(
                 )
             except Exception:
                 logger.warning("best-effort failure reply also failed", exc_info=True)
+            # Dead end: retries are exhausted, no reply carries buttons that could ever
+            # reference this blob again — clean it up. None means the failure happened
+            # before any upload (nothing to delete). delete_image is best-effort and
+            # never raises, so it cannot mask the re-raise below.
+            if blob_name is not None:
+                image_store.delete_image(blob_name)
         raise

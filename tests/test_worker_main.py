@@ -341,6 +341,41 @@ def test_task_installment_receipt_records_total_not_monthly(monkeypatch):
     assert "5,000.00" in sent_request.messages[0].text
 
 
+def test_task_bounds_violation_deletes_orphaned_blob_after_reply(monkeypatch):
+    # Missing amount -> handle_ocr_result's bounds-violation branch returns a
+    # CleanupReply (Task 17): a dead end with no further buttons, so the uploaded
+    # blob will never be referenced by a written row and must be cleaned up.
+    line_api = MagicMock()
+    image_store = MagicMock()
+    ocr_provider = MagicMock()
+    ocr_provider.name = "claude"
+    call_order = []
+    line_api.reply_message.side_effect = lambda *a, **k: call_order.append("reply")
+    image_store.upload_image.return_value = ("202607_msg-1.jpg", "https://x")
+    image_store.delete_image.side_effect = lambda *a, **k: call_order.append("delete")
+    ocr_provider.extract.return_value = {
+        "is_receipt": True,
+        "date": "2026-07-10",
+        "merchant": "Big C",
+        "amount": None,  # triggers MISSING_AMOUNT bounds violation
+        "last4": "1234",
+        "details": "",
+    }
+    client = _wire(
+        monkeypatch, line_api=line_api, image_store=image_store, ocr_provider=ocr_provider
+    )
+
+    resp = client.post("/task", json=_body())
+
+    assert resp.status_code == 200
+    sent_request = line_api.reply_message.call_args[0][0]
+    assert "Cannot read" in sent_request.messages[0].text
+    image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
+    # Delete happens AFTER the reply, mirroring the OcrContentError branch: a failed
+    # send() must still find the blob in place for the Cloud Tasks retry.
+    assert call_order == ["reply", "delete"]
+
+
 def test_task_transient_failure_first_attempt_logs_warning_not_error(monkeypatch, caplog):
     ocr_provider = MagicMock()
     ocr_provider.extract.side_effect = TimeoutError("llm timeout")
@@ -406,6 +441,55 @@ def test_task_transient_failure_non_final_attempt_sends_no_reply(monkeypatch):
 
     assert resp.status_code == 500
     line_api.reply_message.assert_not_called()
+
+
+def test_task_transient_failure_final_attempt_deletes_orphaned_blob(monkeypatch):
+    # Task 17: once retries are exhausted, no reply the user could tap will ever
+    # reference this blob again, so it must be cleaned up (the upload already
+    # succeeded before the OCR call failed — see _wire's default upload_image mock).
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TimeoutError("llm timeout")
+    image_store = MagicMock()
+    client = _wire(monkeypatch, image_store=image_store, ocr_provider=ocr_provider)
+
+    resp = client.post(
+        "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "2"}
+    )
+
+    assert resp.status_code == 500
+    image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
+
+
+def test_task_transient_failure_non_final_attempt_does_not_delete_blob(monkeypatch):
+    ocr_provider = MagicMock()
+    ocr_provider.extract.side_effect = TimeoutError("llm timeout")
+    image_store = MagicMock()
+    client = _wire(monkeypatch, image_store=image_store, ocr_provider=ocr_provider)
+
+    resp = client.post(
+        "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "0"}
+    )
+
+    assert resp.status_code == 500
+    image_store.delete_image.assert_not_called()
+
+
+def test_task_transient_failure_final_attempt_before_upload_does_not_attempt_delete(
+    monkeypatch,
+):
+    # Failure happens before any upload (blob_name stays None) -> nothing to delete.
+    blob_api = MagicMock()
+    blob_api.get_message_content.side_effect = TimeoutError("network timeout")
+    image_store = MagicMock()
+    client = _wire(monkeypatch, blob_api=blob_api, image_store=image_store)
+
+    resp = client.post(
+        "/task", json=_body(), headers={"X-CloudTasks-TaskRetryCount": "2"}
+    )
+
+    assert resp.status_code == 500
+    image_store.upload_image.assert_not_called()
+    image_store.delete_image.assert_not_called()
 
 
 def test_task_transient_failure_final_attempt_reply_also_fails_still_500(monkeypatch, caplog):

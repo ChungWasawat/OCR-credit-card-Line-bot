@@ -10,7 +10,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import MessagingApi, TextMessage
 from linebot.v3.webhook import WebhookParser
 
-from app.handlers import CancelCleanup, Enqueue, route_event
+from app.handlers import CleanupReply, Enqueue, route_event
 from app.image_store import ImageStore, get_image_store
 from app.logging_setup import configure_logging
 from app.reply import Reply, default_messaging_api, send
@@ -97,10 +97,10 @@ def callback(
             action = route_event(event, store)
             if isinstance(action, Enqueue):
                 _enqueue(action, tasks_client)
-            elif isinstance(action, CancelCleanup):
-                # Delete before confirming so "Cancelled" is honest; delete_image is
-                # best-effort and never raises (app/gcs.py), so a GCS hiccup can't
-                # block the reply.
+            elif isinstance(action, CleanupReply):
+                # Delete before confirming so "Cancelled"/the dead-end reply is
+                # honest; delete_image is best-effort and never raises (app/gcs.py),
+                # so a GCS hiccup can't block the reply.
                 image_store.delete_image(action.blob)
                 send(line_api, action.reply)
             elif isinstance(action, Reply):

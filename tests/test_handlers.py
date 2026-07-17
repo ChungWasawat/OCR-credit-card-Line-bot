@@ -22,7 +22,7 @@ from app.buttons import (
     details_quick_reply,
     not_receipt_quick_reply,
 )
-from app.handlers import CancelCleanup, Enqueue, handle_ocr_result, route_event
+from app.handlers import CleanupReply, Enqueue, handle_ocr_result, route_event
 from app.payload import (
     STEP_CANCEL,
     STEP_CARD,
@@ -408,12 +408,15 @@ def test_process_anyway_missing_amount_is_honest_dead_end_no_cards_read(monkeypa
 
     result = route_event(event, store)
 
-    assert isinstance(result, Reply)
+    # A dead end (resending the same image would OCR identically): CleanupReply, not
+    # a plain Reply, so the caller cleans up the orphaned blob too.
+    assert isinstance(result, CleanupReply)
+    assert result.blob == p.blob
     store.read_cards.assert_not_called()
-    assert "Can't record" in result.messages[0].text
+    assert "Can't record" in result.reply.messages[0].text
     # Resending the same image would OCR identically — no false "resend" hope.
-    assert "resend" not in result.messages[0].text.lower()
-    assert result.messages[0].quick_reply is None
+    assert "resend" not in result.reply.messages[0].text.lower()
+    assert result.reply.messages[0].quick_reply is None
 
 
 # --- cancel at every step ---
@@ -440,7 +443,7 @@ def test_cancel_from_every_button_set_ends_flow_without_writing(monkeypatch, bui
 
     result = route_event(event, store)
 
-    assert isinstance(result, CancelCleanup)
+    assert isinstance(result, CleanupReply)
     assert result.blob == p.blob
     assert "Cancelled" in result.reply.messages[0].text
     store.append_receipt.assert_not_called()
@@ -500,7 +503,7 @@ def test_handle_ocr_result_bounds_violation_replies_cannot_read():
         is_receipt=True, date=dt.date(2020, 1, 1), merchant="X", amount=100.0
     )
 
-    reply = handle_ocr_result(
+    result = handle_ocr_result(
         extraction,
         message_id="msg-1",
         blob="202607_msg-1.jpg",
@@ -512,8 +515,12 @@ def test_handle_ocr_result_bounds_violation_replies_cannot_read():
         today=dt.date(2026, 7, 12),
     )
 
-    assert "Cannot read" in reply.messages[0].text
-    assert reply.messages[0].quick_reply is None
+    # Dead end (no card buttons ever follow this reply): CleanupReply, not a plain
+    # Reply, so the caller (worker_main) deletes the now-unreferenceable blob.
+    assert isinstance(result, CleanupReply)
+    assert result.blob == "202607_msg-1.jpg"
+    assert "Cannot read" in result.reply.messages[0].text
+    assert result.reply.messages[0].quick_reply is None
 
 
 def test_handle_ocr_result_valid_returns_card_buttons():
@@ -546,7 +553,7 @@ def test_handle_ocr_result_bounds_violation_with_quality_issue_adds_targeted_tip
         is_receipt=True, date=None, merchant="X", amount=100.0, quality_issue=QualityIssue.DARK
     )
 
-    reply = handle_ocr_result(
+    result = handle_ocr_result(
         extraction,
         message_id="msg-1",
         blob="202607_msg-1.jpg",
@@ -558,7 +565,8 @@ def test_handle_ocr_result_bounds_violation_with_quality_issue_adds_targeted_tip
         today=dt.date(2026, 7, 12),
     )
 
-    assert "too dark" in reply.messages[0].text
+    assert isinstance(result, CleanupReply)
+    assert "too dark" in result.reply.messages[0].text
 
 
 def test_handle_ocr_result_not_a_receipt_ignores_quality_issue():

@@ -59,14 +59,29 @@ class Enqueue:
 
 
 @dataclass(frozen=True)
-class CancelCleanup:
-    """STEP_CANCEL: webhook_main deletes the already-uploaded GCS image (best-effort)
-    then sends `reply`. A dedicated action, not a Reply, because route_event never
-    touches the network — the caller owns the delete, same split as Enqueue.
+class CleanupReply:
+    """A reply that dead-ends the flow (no further buttons, or the quick reply that
+    would have led to a delete is now gone) AND the receipt image it's attached to
+    will never be referenced by a written row. The caller deletes the already-uploaded
+    GCS image (best-effort) around sending `reply` — route_event/handle_ocr_result
+    never touch the network themselves, same split as Enqueue.
 
-    Cancel can never orphan a written row: only _write_and_confirm appends rows
-    (STEP_SKIP / typed details), and the "Recorded ✓" reply carries no quick reply, so
-    no Cancel button exists after a write.
+    Covers: STEP_CANCEL (any step), a bounds-violation reply after OCR
+    (handle_ocr_result), and Process-anyway blocked by bounds (still no usable
+    amount/date, so resending would OCR identically).
+
+    The caller decides delete-vs-send ORDER, not this dataclass: webhook_main deletes
+    before sending so "Cancelled" is honest; worker_main sends first, deletes after —
+    if the send raises (429/5xx) and Cloud Tasks retries, the blob must still be there
+    for that retry's upload to hit the 412 already-uploaded path instead of re-paying
+    for OCR (same rationale as the existing OcrContentError branch).
+
+    Deliberately NOT covers: an ignored "doesn't look like a receipt" prompt (nobody
+    tapped Process anyway or Cancel) — whether a tap is still coming is unknowable, so
+    that blob is not cleaned up here (known limitation, 7-day soft-delete is the
+    safety net). Nor a Cloud Tasks retry that exhausts all attempts — that path deletes
+    its own blob separately in worker_main's outer `except`, since no Reply/CleanupReply
+    return value exists there (it's an exception, not the happy return path).
     """
 
     blob: str
@@ -84,7 +99,7 @@ def allowed_group_id() -> str:
     return os.environ.get("ALLOWED_GROUP_ID", "")
 
 
-def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | CancelCleanup | None:
+def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | CleanupReply | None:
     """Routes one already-parsed Line webhook event. Never touches the network —
     returns an action for the caller (Task 8's webhook_main) to execute.
     """
@@ -189,7 +204,7 @@ def _handle_typed_details(
 
 def _handle_postback(
     p: Payload, *, group_id: str, reply_token: str, store: ReceiptStore
-) -> Reply | CancelCleanup | None:
+) -> Reply | CleanupReply | None:
     if p.step == STEP_CARD:
         text = f"Pick a category — {summary_line(p)}"
         return Reply(
@@ -227,11 +242,14 @@ def _handle_postback(
         )
         violations = check_bounds(extraction)
         if violations:
-            return Reply(
+            # Dead end: resending the same image would OCR identically, so no future
+            # tap will ever reference this blob — clean it up (see CleanupReply).
+            reply = Reply(
                 reply_token=reply_token,
                 group_id=group_id,
                 messages=[TextMessage(text=process_anyway_blocked_message(violations))],
             )
+            return CleanupReply(blob=p.blob, reply=reply)
         cards = store.read_cards()
         text = f"Pick a card — {summary_line(p)}"
         return Reply(
@@ -243,7 +261,7 @@ def _handle_postback(
     if p.step == STEP_CANCEL:
         text = f"Cancelled — {summary_line(p)}"
         reply = Reply(reply_token=reply_token, group_id=group_id, messages=[TextMessage(text=text)])
-        return CancelCleanup(blob=p.blob, reply=reply)
+        return CleanupReply(blob=p.blob, reply=reply)
 
     logger.warning("rejected postback with unknown step=%s", p.step)
     return None
@@ -260,7 +278,7 @@ def handle_ocr_result(
     reply_token: str,
     cards: list[Card],
     today: dt.date | None = None,
-) -> Reply:
+) -> Reply | CleanupReply:
     """Trigger 1's post-OCR branching (worker calls this after OCR + Pydantic
     validation). Kept in Task 7, not Task 8, because it's conversation logic (which
     buttons, which text) — the worker only feeds it a finished extraction.
@@ -288,13 +306,16 @@ def handle_ocr_result(
 
     violations = check_bounds(extraction, today=today)
     if violations:
-        return Reply(
+        # Dead end: no further buttons, so the uploaded image will never be
+        # referenced by a written row — clean it up (see CleanupReply).
+        reply = Reply(
             reply_token=reply_token,
             group_id=group_id,
             messages=[
                 TextMessage(text=bounds_message(violations, extraction.quality_issue))
             ],
         )
+        return CleanupReply(blob=blob, reply=reply)
 
     text = f"Pick a card — {summary_line(p)}"
     return Reply(
