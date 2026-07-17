@@ -102,18 +102,23 @@ Three webhook-triggered actions, one queued:
 
 `Process anyway` (on a misclassified receipt) reuses the extraction already in the
 payload — no second LLM call. `Cancel`, available at every step, ends the flow with
-nothing written and cleans up the orphaned GCS upload.
+nothing written and cleans up the orphaned GCS upload. That cleanup isn't special to
+Cancel: every dead-end reply that leaves no further buttons to tap — unreadable OCR
+output, a bounds-violation ("resend the photo"), a bounds-blocked `Process anyway`, or
+Cloud Tasks giving up after 3 retries — deletes the uploaded photo too, since no sheet
+row will ever reference it.
 
 | Input | Bot reaction |
 |---|---|
 | Valid receipt photo | Extracted merchant + amount shown, card buttons (last-4 match ordered first) |
 | Installment slip (ผ่อนชำระ/IPP/Smart Pay) | Same, but `amount` = the TOTAL purchase, not the monthly figure; term appended to `details` |
-| Blurry / dark / rotated / oversized / corrupt photo | One attempt, no retries — "Couldn't read that photo" or a bounds-violation message, optionally with a targeted retake tip (e.g. "the photo looks blurry") |
+| Blurry / dark / rotated / oversized / corrupt photo | One attempt, no retries — "Couldn't read that photo" or a bounds-violation message, optionally with a targeted retake tip (e.g. "the photo looks blurry"); photo deleted either way |
 | Non-receipt photo (pet, selfie, screenshot) | "Doesn't look like a receipt" + `Process anyway` button; one LLM call either way, no row unless tapped |
 | 3+ photos sent as a batch | 3 independent prompts, each with its own merchant/amount; each completes to its own row (LINE only shows quick-reply buttons on the newest message — completing an earlier prompt first is the practical order) |
 | Duplicate webhook delivery (same `webhookEventId`) | Collapsed at the Cloud Tasks layer (`AlreadyExists`) — exactly one task, one OCR call, one row |
 | Plain text / sticker / video / PDF | Ignored silently (no LLM call, no reply) |
 | `Cancel` tapped at any step | "Cancelled — `<summary>`" reply, nothing written, GCS upload deleted |
+| System failure (expired API key, quota, provider outage) | Up to 3 Cloud Tasks retries, then "Something went wrong — please resend that."; photo deleted once retries are exhausted |
 | Image from a non-allowlisted group | Rejected at the webhook (before any LLM call), group ID logged so the owner can allowlist it, no reply |
 
 Full breakdown of every abnormal-photo scenario and its classification (user-fixable vs.
@@ -275,6 +280,10 @@ not prompt-based:
   paper, heavy compression artifacts) isn't specially handled — see
   [`docs/abnormal_photo_scenarios.md`](docs/abnormal_photo_scenarios.md)'s "not
   addressed" section for the full list and why they're an accepted risk at this scale.
+- A "Doesn't look like a receipt" prompt that nobody ever taps (`Process anyway` or
+  `Cancel`) leaves its photo in the bucket — whether a tap is still coming is unknowable
+  server-side, so there's no safe moment to clean it up. Same 7-day soft-delete safety
+  net as every other orphaned-photo case; no automatic sweep exists.
 
 ## Usage notes
 
