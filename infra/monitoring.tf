@@ -14,10 +14,16 @@ resource "google_monitoring_notification_channel" "email" {
 }
 
 # Fires when an ERROR-severity log line appears in either Cloud Run service.
-# ERROR logs are only written when a receipt fails after all 3 Cloud Tasks
-# retries (see Task 9's WARNING/WARNING/ERROR pattern in worker_main.py) —
-# so any single match here is a genuine, already-exhausted failure worth a
-# human look, not noise.
+# Four sites emit ERROR, all genuine failures worth a human look, not noise:
+#   - worker: retry chain exhausted (Task 9's WARNING/WARNING/ERROR pattern,
+#     services/worker_main.py — "task failed, retries exhausted")
+#   - worker: task body's group_id isn't allowlisted (defense in depth,
+#     services/worker_main.py — "rejected task: group not allowlisted")
+#   - webhook: unhandled exception processing an event (Task 8's
+#     defense-in-depth catch-all, services/webhook_main.py)
+#   - webhook: Sheets row write failed, e.g. TabNotFoundError
+#     (app/handlers.py::_write_and_confirm — "failed to append receipt row")
+# See docs/logging.md for the full severity/field reference.
 resource "google_monitoring_alert_policy" "error_logs" {
   display_name = "receipt-bot ERROR logs"
   combiner     = "OR"
