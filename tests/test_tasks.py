@@ -119,22 +119,28 @@ def test_create_http_task_retries_once_on_transient_error_then_succeeds():
     assert client.create_task.call_count == 2
 
 
-def test_create_http_task_transient_error_twice_propagates():
+def test_create_http_task_transient_error_twice_propagates(caplog):
     client = _client()
     client.create_task.side_effect = [ServiceUnavailable("503"), ServiceUnavailable("503")]
 
-    with pytest.raises(ServiceUnavailable):
-        create_http_task(
-            name="wh-event-5",
-            url="https://worker.example/task",
-            body=b"{}",
-            service_account_email="sa@p.iam.gserviceaccount.com",
-            client=client,
-            project="p",
-            location="l",
-            queue="q",
-        )
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ServiceUnavailable):
+            create_http_task(
+                name="wh-event-5",
+                url="https://worker.example/task",
+                body=b"{}",
+                service_account_email="sa@p.iam.gserviceaccount.com",
+                client=client,
+                project="p",
+                location="l",
+                queue="q",
+            )
     assert client.create_task.call_count == 2
+    retries = [r for r in caplog.records if r.message == "task enqueue failed, retrying in-process"]
+    assert len(retries) == 1
+    assert retries[0].webhook_event_id == "wh-event-5"
+    assert retries[0].error_type == "provider_error"
+    assert retries[0].attempt == 1
 
 
 def test_create_http_task_already_exists_on_retry_collapses_as_duplicate():

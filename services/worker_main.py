@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -15,6 +16,7 @@ from linebot.v3.messaging import (
 )
 from pydantic import ValidationError
 
+from app.errors import classify_exception
 from app.gcs import filename_for
 from app.handlers import CleanupReply, allowed_group_id, handle_ocr_result
 from app.image_store import ImageStore, get_image_store
@@ -58,16 +60,16 @@ def task(
     allowed = allowed_group_id()
     if not allowed or body.group_id != allowed:
         logger.error(
-            "rejected task with non-allowlisted group_id=%s message_id=%s",
-            body.group_id,
-            body.message_id,
+            "rejected task: group not allowlisted",
+            extra={"group_id": body.group_id, "message_id": body.message_id},
         )
         return {"status": "rejected"}
 
     # Tracked outside the try so the outer except's final-attempt cleanup (below) knows
     # whether an upload ever happened — None means the failure was before any blob
-    # existed (nothing to delete).
+    # existed (nothing to delete). `step` names the phase for the failure log below.
     blob_name: str | None = None
+    step = "start"
     try:
         line_api, blob_api = clients
 
@@ -75,12 +77,14 @@ def task(
         # from Line's content API) propagates to the outer except below, then to
         # FastAPI's default 500 handler, and Cloud Tasks retries per the queue's
         # max-attempts/backoff config (Task 10).
+        step = "download"
         image_bytes = bytes(
             blob_api.get_message_content(body.message_id, _request_timeout=10)
         )
 
         # Transient boundary: GCS upload happens BEFORE OCR — Line content expires, the
         # GCS copy is the source of truth. Same no-try/except treatment.
+        step = "upload"
         blob_name, _ = image_store.upload_image(
             image_bytes, filename_for(body.message_id, datetime.now(timezone.utc))
         )
@@ -95,14 +99,16 @@ def task(
         # input, not a network problem) if it ever fires. This `return` exits before
         # the outer except below — content errors are not transient failures and must
         # not be logged/counted as a retry attempt.
+        step = "ocr"
         provider = get_ocr_provider()
+        ocr_started = time.perf_counter()
         try:
             raw = provider.extract(image_bytes)
             extraction = ReceiptExtraction.model_validate(raw)
         except (OcrContentError, ValidationError):
             logger.warning(
                 "unrecoverable OCR output, replying cannot-read",
-                extra={"message_id": body.message_id, "step": "ocr"},
+                extra={"message_id": body.message_id, "step": step},
             )
             send(
                 line_api,
@@ -130,6 +136,7 @@ def task(
                 "amount": extraction.amount,
                 "ocr_model": provider.name,
                 "quality_issue": extraction.quality_issue,
+                "latency_ms": int((time.perf_counter() - ocr_started) * 1000),
             },
         )
         # Any other exception from get_ocr_provider().extract() (e.g. a network/timeout/
@@ -139,8 +146,10 @@ def task(
 
         # Transient boundary: a Sheets read failure should retry, not silently drop the
         # receipt. No try/except.
+        step = "read_cards"
         cards = store.read_cards()
 
+        step = "reply"
         result = handle_ocr_result(
             extraction,
             message_id=body.message_id,
@@ -164,7 +173,7 @@ def task(
         else:
             send(line_api, result)
         return {"status": "ok"}
-    except Exception:
+    except Exception as exc:
         # X-CloudTasks-TaskRetryCount is 0-indexed (0 = first delivery, no retries
         # yet). This block is purely observational — it always re-raises so the
         # response is still a 500 either way; Cloud Tasks' own queue config (Task 10)
@@ -175,14 +184,13 @@ def task(
         is_final_attempt = attempt >= MAX_ATTEMPTS
         log = logger.error if is_final_attempt else logger.warning
         log(
-            "task processing failed on attempt %d/%d%s",
-            attempt,
-            MAX_ATTEMPTS,
-            " — all attempts exhausted, receipt dropped" if is_final_attempt else "",
+            "task failed, retries exhausted" if is_final_attempt else "task failed, retrying",
             exc_info=True,
             extra={
                 "message_id": body.message_id,
                 "webhook_event_id": body.webhook_event_id,
+                "step": step,
+                "error_type": classify_exception(exc),
                 "attempt": attempt,
                 "max_attempts": MAX_ATTEMPTS,
             },
@@ -204,8 +212,12 @@ def task(
                         messages=[TextMessage(text="Something went wrong — please resend that.")],
                     ),
                 )
-            except Exception:
-                logger.warning("best-effort failure reply also failed", exc_info=True)
+            except Exception as reply_exc:
+                logger.warning(
+                    "best-effort failure reply also failed",
+                    exc_info=True,
+                    extra={"error_type": classify_exception(reply_exc)},
+                )
             # Dead end: retries are exhausted, no reply carries buttons that could ever
             # reference this blob again — clean it up. None means the failure happened
             # before any upload (nothing to delete). delete_image is best-effort and

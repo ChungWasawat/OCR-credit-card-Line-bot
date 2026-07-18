@@ -10,6 +10,7 @@ from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import MessagingApi, TextMessage
 from linebot.v3.webhook import WebhookParser
 
+from app.errors import classify_exception
 from app.handlers import CleanupReply, Enqueue, route_event
 from app.image_store import ImageStore, get_image_store
 from app.logging_setup import configure_logging
@@ -105,7 +106,7 @@ def callback(
                 send(line_api, action.reply)
             elif isinstance(action, Reply):
                 send(line_api, action)
-        except Exception:
+        except Exception as exc:
             # Defense in depth only: known failure modes (e.g. TabNotFoundError on a
             # Sheets write) are already handled inside app/handlers.py, which returns
             # an error Reply instead of raising. This catch is for anything else
@@ -115,7 +116,10 @@ def callback(
             logger.error(
                 "unhandled error processing webhook event",
                 exc_info=True,
-                extra={"webhook_event_id": getattr(event, "webhook_event_id", None)},
+                extra={
+                    "webhook_event_id": getattr(event, "webhook_event_id", None),
+                    "error_type": classify_exception(exc),
+                },
             )
             # Best-effort failure signal to the user: this handler always returns 200,
             # so Line never redelivers — without this, an enqueue failure (e.g. the
@@ -136,7 +140,11 @@ def callback(
                             ],
                         ),
                     )
-                except Exception:
-                    logger.warning("best-effort failure reply also failed", exc_info=True)
+                except Exception as reply_exc:
+                    logger.warning(
+                        "best-effort failure reply also failed",
+                        exc_info=True,
+                        extra={"error_type": classify_exception(reply_exc)},
+                    )
 
     return {"status": "ok"}

@@ -127,9 +127,8 @@ class SheetsStore(ReceiptStore):
         try:
             if self._message_id_exists(tab, row.message_id):
                 logger.info(
-                    "duplicate receipt write skipped tab=%s message_id=%s",
-                    tab,
-                    row.message_id,
+                    "duplicate receipt write skipped",
+                    extra={"tab": tab, "message_id": row.message_id},
                 )
                 return False
             body = {"values": [build_row(row)]}
@@ -173,7 +172,7 @@ class SheetsStore(ReceiptStore):
             padded = raw_row + [""] * (CARDS_COLUMNS - len(raw_row))
             card_id = padded[0].strip()
             if not card_id:
-                logger.warning("Cards!A%d has no card_id, skipping row", i)
+                logger.warning("Cards row has no card_id, skipped", extra={"row_index": i})
                 continue
             cards.append(
                 Card(

@@ -125,6 +125,8 @@ def test_task_happy_path_valid_receipt_returns_200(monkeypatch, caplog):
     assert ocr_results[0].message_id == "msg-1"
     assert ocr_results[0].is_receipt is True
     assert ocr_results[0].ocr_model == "claude"
+    assert isinstance(ocr_results[0].latency_ms, int)
+    assert ocr_results[0].latency_ms >= 0
 
 
 def test_task_uploads_to_gcs_before_running_ocr(monkeypatch):
@@ -236,16 +238,23 @@ def test_task_validation_error_from_model_validate_replies_cannot_read_returns_2
     image_store.delete_image.assert_called_once_with("202607_msg-1.jpg")
 
 
-def test_task_transient_error_downloading_image_propagates_500(monkeypatch):
+def test_task_transient_error_downloading_image_propagates_500(monkeypatch, caplog):
     blob_api = MagicMock()
     blob_api.get_message_content.side_effect = TimeoutError("network timeout")
     image_store = MagicMock()
     client = _wire(monkeypatch, blob_api=blob_api, image_store=image_store)
 
-    resp = client.post("/task", json=_body())
+    with caplog.at_level(logging.WARNING):
+        resp = client.post("/task", json=_body())
 
     assert resp.status_code == 500
     image_store.upload_image.assert_not_called()
+    # step must name the phase that actually failed (download, not ocr) — this is
+    # what lets a failure log say WHERE without reading the traceback.
+    failures = [r for r in caplog.records if r.message == "task failed, retrying"]
+    assert len(failures) == 1
+    assert failures[0].step == "download"
+    assert failures[0].error_type == "network"
 
 
 def test_task_transient_error_uploading_to_gcs_propagates_500(monkeypatch):
@@ -390,8 +399,11 @@ def test_task_transient_failure_first_attempt_logs_warning_not_error(monkeypatch
     assert not [r for r in caplog.records if r.levelno == logging.ERROR]
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
+    assert warnings[0].message == "task failed, retrying"
     assert warnings[0].attempt == 1
     assert warnings[0].max_attempts == 3
+    assert warnings[0].step == "ocr"
+    assert warnings[0].error_type == "network"
 
 
 def test_task_transient_failure_final_attempt_logs_error(monkeypatch, caplog):
@@ -407,9 +419,12 @@ def test_task_transient_failure_final_attempt_logs_error(monkeypatch, caplog):
     assert resp.status_code == 500
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert len(errors) == 1
+    assert errors[0].message == "task failed, retries exhausted"
     assert errors[0].exc_info is not None
     assert errors[0].attempt == 3
     assert errors[0].max_attempts == 3
+    assert errors[0].step == "ocr"
+    assert errors[0].error_type == "network"
 
 
 def test_task_transient_failure_final_attempt_sends_best_effort_reply(monkeypatch, caplog):
@@ -550,7 +565,7 @@ def test_task_non_allowlisted_group_id_rejected_no_processing(monkeypatch, caplo
     assert resp.json() == {"status": "rejected"}
     blob_api.get_message_content.assert_not_called()
     line_api.reply_message.assert_not_called()
-    assert "Csomeothergroup" in caplog.text
+    assert caplog.records[0].group_id == "Csomeothergroup"
 
 
 def test_task_empty_allowlist_rejects_every_task(monkeypatch, caplog):

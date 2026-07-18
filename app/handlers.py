@@ -23,6 +23,7 @@ from app.buttons import (
     process_anyway_blocked_message,
     summary_line,
 )
+from app.errors import classify_exception
 from app.gcs import view_link_for
 from app.payload import (
     FILL_IN_SIGNATURE,
@@ -105,12 +106,12 @@ def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | Cleanup
     """
     group_id = _group_id(event)
     if group_id is None:
-        logger.info("ignoring event with no group source")
+        logger.info("ignored event: no group source")
         return None
 
     allowed = allowed_group_id()
     if not allowed or group_id != allowed:
-        logger.warning("rejected event from non-allowlisted group id=%s", group_id)
+        logger.warning("rejected event: group not allowlisted", extra={"group_id": group_id})
         return None
 
     if isinstance(event, MessageEvent) and isinstance(event.message, ImageMessageContent):
@@ -134,7 +135,7 @@ def route_event(event: object, store: ReceiptStore) -> Enqueue | Reply | Cleanup
         try:
             p = decode(event.postback.data)
         except PayloadError:
-            logger.warning("rejected corrupt or stale postback data")
+            logger.warning("rejected corrupt or stale postback data", extra={"group_id": group_id})
             return None
         return _handle_postback(p, group_id=group_id, reply_token=event.reply_token, store=store)
 
@@ -168,10 +169,15 @@ def _write_and_confirm(
     try:
         row = _build_row(p, details=details)
         written = store.append_receipt(row)
-    except Exception:
+    except Exception as exc:
         logger.error(
-            "failed to append receipt row message_id=%s step=%s", p.message_id, p.step,
+            "failed to append receipt row",
             exc_info=True,
+            extra={
+                "message_id": p.message_id,
+                "step": p.step,
+                "error_type": classify_exception(exc),
+            },
         )
         return Reply(
             reply_token=reply_token,
@@ -189,7 +195,7 @@ def _handle_typed_details(
     try:
         p, typed = decode_fill_in(text)
     except PayloadError:
-        logger.warning("rejected corrupt or stale fill-in text")
+        logger.warning("rejected corrupt or stale fill-in text", extra={"group_id": group_id})
         return Reply(
             reply_token=reply_token,
             group_id=group_id,
@@ -263,7 +269,7 @@ def _handle_postback(
         reply = Reply(reply_token=reply_token, group_id=group_id, messages=[TextMessage(text=text)])
         return CleanupReply(blob=p.blob, reply=reply)
 
-    logger.warning("rejected postback with unknown step=%s", p.step)
+    logger.warning("rejected postback: unknown step", extra={"step": p.step})
     return None
 
 

@@ -12,6 +12,8 @@ from google.api_core.exceptions import (
 from google.cloud import tasks_v2
 from pydantic import BaseModel
 
+from app.errors import classify_exception
+
 logger = logging.getLogger(__name__)
 
 # Single source of truth for Task 9's retry-exhaustion logging (services/worker_main.py
@@ -97,12 +99,20 @@ def create_http_task(
             )
             return True
         except AlreadyExists:
-            logger.info("task name=%s already exists, duplicate delivery collapsed", name)
+            logger.info(
+                "duplicate task delivery collapsed", extra={"webhook_event_id": name}
+            )
             return False
-        except _TRANSIENT_ENQUEUE_ERRORS:
+        except _TRANSIENT_ENQUEUE_ERRORS as exc:
             if attempt == _ENQUEUE_ATTEMPTS:
                 raise
             logger.warning(
-                "create_task transient failure on attempt %d/%d, retrying",
-                attempt, _ENQUEUE_ATTEMPTS, exc_info=True,
+                "task enqueue failed, retrying in-process",
+                exc_info=True,
+                extra={
+                    "webhook_event_id": name,
+                    "error_type": classify_exception(exc),
+                    "attempt": attempt,
+                    "max_attempts": _ENQUEUE_ATTEMPTS,
+                },
             )

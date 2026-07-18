@@ -9,6 +9,8 @@ import google.auth
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
+from app.errors import classify_exception
+
 logger = logging.getLogger(__name__)
 
 GCS_SCOPES = ["https://www.googleapis.com/auth/devstorage.read_write"]
@@ -66,7 +68,7 @@ def upload_image(
         # 412 = this filename was already uploaded by a previous attempt. The filename
         # embeds the Line message_id, so same name always means same bytes — already
         # uploaded IS success for this attempt.
-        logger.info("blob %s already uploaded by a previous attempt, continuing", filename)
+        logger.info("blob already uploaded by a previous attempt", extra={"blob": filename})
 
     view_link = view_link_for(blob.name, bucket_name=bucket_name)
     return blob.name, view_link
@@ -89,11 +91,15 @@ def delete_image(
         client = client or _default_client()
         bucket_name = bucket_name or os.environ["GCS_BUCKET"]
         client.bucket(bucket_name).blob(blob_name).delete(timeout=30)
-        logger.info("deleted blob %s", blob_name)
+        logger.info("deleted blob", extra={"blob": blob_name})
     except NotFound:
-        logger.info("blob %s already deleted, nothing to do", blob_name)
-    except Exception:
-        logger.warning("best-effort delete of blob %s failed, continuing", blob_name, exc_info=True)
+        logger.info("blob already deleted", extra={"blob": blob_name})
+    except Exception as exc:
+        logger.warning(
+            "best-effort blob delete failed",
+            exc_info=True,
+            extra={"blob": blob_name, "error_type": classify_exception(exc)},
+        )
 
 
 @lru_cache

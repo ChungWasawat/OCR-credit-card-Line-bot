@@ -150,7 +150,7 @@ def test_unknown_group_rejected_and_group_id_logged(monkeypatch, caplog):
         result = route_event(event, store)
 
     assert result is None
-    assert "Csomeothergroup" in caplog.text
+    assert caplog.records[0].group_id == "Csomeothergroup"
 
 
 def test_empty_allowlist_rejects_and_logs_group_id(monkeypatch, caplog):
@@ -162,7 +162,7 @@ def test_empty_allowlist_rejects_and_logs_group_id(monkeypatch, caplog):
         result = route_event(event, store)
 
     assert result is None
-    assert "Cdiscoverme" in caplog.text
+    assert caplog.records[0].group_id == "Cdiscoverme"
 
 
 def test_dm_source_ignored(monkeypatch):
@@ -380,7 +380,10 @@ def test_tab_not_found_error_returns_error_reply_and_logs_error(monkeypatch, cap
     assert isinstance(result, Reply)
     assert "Failed to record" in result.messages[0].text
     assert "✓" not in result.messages[0].text
-    assert "msg-1" in caplog.text
+    record = caplog.records[0]
+    assert record.message_id == "msg-1"
+    assert record.step == STEP_SKIP
+    assert record.error_type == "unknown"
 
 
 # --- process anyway ---

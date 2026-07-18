@@ -62,8 +62,8 @@ def send(api: MessagingApi, reply: Reply) -> None:
         if exc.status != 400 or not _is_invalid_reply_token(exc):
             raise
         logger.warning(
-            "reply token invalid (expired or already used), falling back to push: %s",
-            reply.reply_token,
+            "reply token invalid, falling back to push",
+            extra={"group_id": reply.group_id},
         )
         api.push_message(
             PushMessageRequest(to=reply.group_id, messages=reply.messages),
@@ -71,4 +71,11 @@ def send(api: MessagingApi, reply: Reply) -> None:
         )
         global _push_count
         _push_count += 1
-        logger.info("push_fallback used, session_total=%d (%s)", _push_count, _PUSH_QUOTA_NOTE)
+        logger.info(
+            "push fallback used",
+            extra={
+                "group_id": reply.group_id,
+                "push_total": _push_count,
+                "note": _PUSH_QUOTA_NOTE,
+            },
+        )

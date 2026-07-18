@@ -100,7 +100,9 @@ def test_delete_image_any_failure_is_swallowed_and_logged(caplog):
     with caplog.at_level("WARNING"):
         delete_image("202603_msg-1.jpg", client=client, bucket_name="my-bucket")
 
-    assert "202603_msg-1.jpg" in caplog.text
+    record = caplog.records[0]
+    assert record.blob == "202603_msg-1.jpg"
+    assert record.error_type == "network"
 
 
 def test_view_link_for_rebuilds_authenticated_link_from_blob_name_alone():

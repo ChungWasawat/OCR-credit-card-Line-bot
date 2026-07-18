@@ -41,8 +41,13 @@ def _build_filter(trace_id: str | None) -> str:
     if not trace_id:
         return base
     escaped = trace_id.replace("\\", "\\\\").replace('"', '\\"')
+    # Exact-match clauses for every ID-shaped field the JsonFormatter can emit, plus a
+    # substring fallback on the message text itself — needed for log entries written
+    # before the constant-message migration, which still %-interpolated some IDs
+    # directly into the message (e.g. old "deleted blob <name>" lines).
     id_clause = (
         f'(jsonPayload.message_id="{escaped}" OR jsonPayload.webhook_event_id="{escaped}" '
+        f'OR jsonPayload.group_id="{escaped}" OR jsonPayload.blob="{escaped}" '
         f'OR jsonPayload.message:"{escaped}")'
     )
     return f"{base} AND {id_clause}"

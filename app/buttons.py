@@ -109,9 +109,8 @@ def card_quick_reply(cards: list[Card], p: Payload) -> QuickReply:
     ordered = sorted(cards, key=lambda c: c.last4 != p.last4)
     if len(ordered) > MAX_CARD_ITEMS:
         logger.warning(
-            "Cards tab has %d active cards, only the first %d fit in a quick reply",
-            len(ordered),
-            MAX_CARD_ITEMS,
+            "active cards exceed quick-reply capacity",
+            extra={"active_cards": len(ordered), "max_items": MAX_CARD_ITEMS},
         )
         ordered = ordered[:MAX_CARD_ITEMS]
     items = []
