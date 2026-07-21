@@ -1,17 +1,18 @@
-# Copy this file to terraform.tfvars (gitignored) and fill in sheet_id.
-# Everything else below is already a real, non-secret value for this project.
+# Copy this file to terraform.tfvars (gitignored) and fill in every
+# placeholder below with your own real values — none of these are shared
+# across deployments.
 
-gcp_project = "line-credit-card-ocr-bot"
+gcp_project = "your-gcp-project-id"
 region      = "asia-southeast1"
 
 # From your .env — the only value you need to fill in yourself.
 sheet_id = "REPLACE_WITH_SHEET_ID"
 
-gcs_bucket  = "line-ocr-bot-receipts"
-github_repo = "ChungWasawat/OCR-credit-card-Line-bot"
+gcs_bucket  = "your-gcs-bucket-name"
+github_repo = "your-github-username/your-repo-name"
 
-billing_account_id   = "012756-F90E95-298570"
-alert_email          = "messibarca852@gmail.com"
+billing_account_id   = "XXXXXX-XXXXXX-XXXXXX"
+alert_email          = "you@example.com"
 budget_currency_code = "THB"
 budget_amount_units  = "100"
 

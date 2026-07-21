@@ -5,7 +5,6 @@
 variable "gcp_project" {
   description = "GCP Project ID (from 'gcloud config get-value project')"
   type        = string
-  default     = "line-credit-card-ocr-bot"
 }
 
 variable "region" {
@@ -23,13 +22,11 @@ variable "sheet_id" {
 variable "gcs_bucket" {
   description = "GCS bucket name for storing receipt images (already created in Task 5, imported not created)"
   type        = string
-  default     = "line-ocr-bot-receipts"
 }
 
 variable "github_repo" {
   description = "GitHub repo (owner/repo) for Workload Identity Federation - used by Task 11 CI/CD"
   type        = string
-  default     = "ChungWasawat/OCR-credit-card-Line-bot"
 }
 
 variable "billing_account_id" {

@@ -1,5 +1,10 @@
 key.json
 .env
+.env.*
+!.env.example
+*.pem
+*service-account*.json
+credentials*.json
 .venv/
 *.tfvars
 __pycache__/
